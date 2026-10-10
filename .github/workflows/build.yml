@@ -1,0 +1,73 @@
+name: Validate and package SolisShader
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Validate required files and shader structure
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s README.md
+          test -s shaders/gbuffers_terrain.vsh
+          test -s shaders/gbuffers_terrain.fsh
+          test -s shaders/composite.vsh
+          test -s shaders/composite.fsh
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import sys
+
+          files = [
+              Path("shaders/gbuffers_terrain.vsh"),
+              Path("shaders/gbuffers_terrain.fsh"),
+              Path("shaders/composite.vsh"),
+              Path("shaders/composite.fsh"),
+          ]
+          errors = []
+          for path in files:
+              source = path.read_text(encoding="utf-8")
+              if not source.startswith("#version 330 compatibility"):
+                  errors.append(f"{path}: missing GLSL 330 compatibility version directive")
+              if source.count("{") != source.count("}"):
+                  errors.append(f"{path}: mismatched braces")
+              if "\x00" in source:
+                  errors.append(f"{path}: contains a NUL byte")
+          if errors:
+              print("\n".join(errors), file=sys.stderr)
+              sys.exit(1)
+          print(f"Validated {len(files)} shader source files.")
+          PY
+
+      - name: Package shader pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/SolisShader/shaders
+          cp README.md dist/SolisShader/README.md
+          cp shaders/*.vsh shaders/*.fsh dist/SolisShader/shaders/
+          cd dist/SolisShader
+          zip -r ../../SolisShader.zip shaders README.md
+          cd ../..
+          unzip -l SolisShader.zip
+          test -s SolisShader.zip
+
+      - name: Upload downloadable ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: SolisShader
+          path: SolisShader.zip
+          if-no-files-found: error
+          retention-days: 30
