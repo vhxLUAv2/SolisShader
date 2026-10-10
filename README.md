@@ -23,11 +23,15 @@ Open Shader Pack Settings and choose a profile:
 
 These are relative quality presets, not FPS guarantees. Actual performance depends on resolution, GPU, driver, scene complexity, other mods, and the shader loader. A GTX 1660 or RTX 3060 may perform differently across worlds; 100+ FPS cannot be promised without testing on the target setup.
 
-## Install
+## Download and install
 
-1. Download the ZIP artifact from a successful GitHub Actions run.
+**Direct download:** [Download SolisShader.zip from GitHub Releases](https://github.com/vhxLUAv2/SolisShader/releases/latest/download/SolisShader.zip).
+
+1. Download `SolisShader.zip` using the direct link above.
 2. Keep the ZIP compressed and place it in the shaderpacks folder opened from Iris' Shader Packs screen.
 3. Select SolisShader in Minecraft.
+
+Each successful push to `main` updates the latest GitHub Release download. Pull requests still validate and package the shader pack without publishing a release.
 
 The artifact contains a top-level shaders folder, ready for the shader-pack loader.
 

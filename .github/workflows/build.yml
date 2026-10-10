@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   package:
@@ -110,10 +110,28 @@ jobs:
           unzip -Z1 SolisShader.zip | grep -q '^shaders/shaders.properties$'
           unzip -Z1 SolisShader.zip | grep -q '^shaders/final.fsh$'
 
-      - name: Upload downloadable ZIP
+      - name: Upload downloadable ZIP artifact
         uses: actions/upload-artifact@v4
         with:
           name: SolisShader
           path: SolisShader.zip
           if-no-files-found: error
           retention-days: 30
+
+      # A stable URL lets users download the actual shader pack ZIP without
+      # first downloading GitHub's wrapper artifact ZIP and extracting it.
+      - name: Publish direct GitHub download
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: SolisShader Latest Build
+          body: |
+            Automatically packaged SolisShader build from the main branch.
+            Download SolisShader.zip and place it directly in the Minecraft shaderpacks folder.
+            The shader pack is GLSL-validated; in-game compatibility and FPS are not guaranteed.
+          target_commitish: ${{ github.sha }}
+          files: SolisShader.zip
+          fail_on_unmatched_files: true
+          overwrite_files: true
+          make_latest: true
