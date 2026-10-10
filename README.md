@@ -51,4 +51,6 @@ GitHub Actions checks required files, GLSL syntax where supported by glslangVali
 
 ## Build artifact
 
-Each push to main, pull request, or manual workflow dispatch validates and packages SolisShader.zip. The uploaded workflow artifact is retained for 30 days.
+## Build and distribution
+
+The currently published ZIP is a static GitHub Release asset. Download it directly at [SolisShader.zip](https://github.com/vhxLUAv2/SolisShader/releases/download/latest/SolisShader.zip). This repository no longer uses GitHub Actions to build or publish future versions; after source changes, the ZIP must be rebuilt and uploaded manually.
