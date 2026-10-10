@@ -22,11 +22,11 @@ No fixed FPS can be guaranteed. GPU model alone does not determine performance; 
 
 ## Direct download
 
-[**Download SolisShader.zip**](https://github.com/vhxLUAv2/SolisShader/raw/refs/heads/main/SolisShader.zip) directly from this repository. No GitHub Actions are required for downloading.
+[**Download the repository ZIP directly from GitHub**](https://github.com/vhxLUAv2/SolisShader/archive/refs/heads/main.zip). No GitHub Actions are required.
 
-1. Download the ZIP file.
-2. Keep it compressed and place it in the shaderpacks folder opened from Iris' Shader Packs screen.
-3. Select SolisShader.
+1. Download and extract the ZIP.
+2. Move the extracted `SolisShader-main` folder into the Minecraft `shaderpacks` folder opened from Iris' Shader Packs screen.
+3. Select SolisShader from the shader list. The repository archive is a source snapshot, so use the extracted folder rather than selecting the repository ZIP itself.
 
 ## Notes and compatibility
 
