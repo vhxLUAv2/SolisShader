@@ -2,6 +2,7 @@
 
 #define ENABLE_VOLUMETRICS 1 // [0 1]
 #define ENABLE_CAUSTICS 1 // [0 1]
+//#define ENABLE_XRAY // Reveal ores through terrain without distance fog
 #define VOLUMETRIC_STEPS 4 // [3 4 6 8 12]
 #define FOG_DENSITY 0.006 // [0.003 0.004 0.006 0.008 0.010]
 
@@ -49,16 +50,19 @@ void main() {
         viewRay = normalize(viewRay);
     } else {
         vec3 viewPos = unprojectView(texcoord, depth);
-        float distanceToPixel = length(viewPos);
         vec3 playerPos = (gbufferModelViewInverse * vec4(viewPos, 1.0)).xyz;
-        float worldHeight = cameraPosition.y + playerPos.y;
-        float altitudeDensity = exp(-clamp(worldHeight - 62.0, -40.0, 180.0) * 0.007);
-        float weatherDensity = mix(FOG_DENSITY, FOG_DENSITY * 2.7, clamp(rainStrength, 0.0, 1.0));
-        float fogAmount = 1.0 - exp(-distanceToPixel * weatherDensity * altitudeDensity);
-        vec3 sunDirView = normalize(sunPosition);
-        float phase = pow(max(dot(normalize(viewPos), sunDirView), 0.0), 10.0);
-        vec3 scatteringColor = mix(fogLinear, vec3(1.0, 0.70, 0.42), phase * 0.22);
-        color.rgb = mix(color.rgb, scatteringColor, clamp(fogAmount, 0.0, 0.88));
+
+        #ifndef ENABLE_XRAY
+            float distanceToPixel = length(viewPos);
+            float worldHeight = cameraPosition.y + playerPos.y;
+            float altitudeDensity = exp(-clamp(worldHeight - 62.0, -40.0, 180.0) * 0.007);
+            float weatherDensity = mix(FOG_DENSITY, FOG_DENSITY * 2.7, clamp(rainStrength, 0.0, 1.0));
+            float fogAmount = 1.0 - exp(-distanceToPixel * weatherDensity * altitudeDensity);
+            vec3 sunDirView = normalize(sunPosition);
+            float phase = pow(max(dot(normalize(viewPos), sunDirView), 0.0), 10.0);
+            vec3 scatteringColor = mix(fogLinear, vec3(1.0, 0.70, 0.42), phase * 0.22);
+            color.rgb = mix(color.rgb, scatteringColor, clamp(fogAmount, 0.0, 0.88));
+        #endif
 
         #if ENABLE_CAUSTICS == 1
         if (isEyeInWater != 0) {
