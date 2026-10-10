@@ -1,7 +1,7 @@
 #version 330 compatibility
 
 // Shader-pack menu setting; profiles can override this constant.
-const bool ENABLE_TERRAIN_TINT = true;
+#define ENABLE_TERRAIN_TINT 1 // [0 1]
 
 uniform sampler2D gtexture;
 uniform sampler2D lightmap;
@@ -21,10 +21,10 @@ void main() {
     vec3 light = texture(lightmap, lmcoord).rgb;
     vec3 lit = albedo.rgb * light;
 
-    if (ENABLE_TERRAIN_TINT) {
-        // Very restrained warmth; Minecraft's lightmap remains the main light source.
-        lit *= vec3(1.018, 1.008, 0.990);
-    }
+    #if ENABLE_TERRAIN_TINT == 1
+    // Subtle warmth; Minecraft's lightmap remains the main light source.
+    lit *= vec3(1.018, 1.008, 0.990);
+    #endif
 
     gl_FragData[0] = vec4(lit, albedo.a);
     // UVs let later passes distinguish blocklight from sky-light influence.

@@ -1,6 +1,6 @@
 #version 330 compatibility
 
-const bool ENABLE_WATER_WAVES = true;
+#define ENABLE_WATER_WAVES 1 // [0 1]
 
 uniform sampler2D gtexture;
 uniform sampler2D lightmap;
@@ -22,7 +22,7 @@ void main() {
     waterColor *= vec3(0.88, 1.015, 1.08);
 
     vec3 viewN = normalize(normalView);
-    if (ENABLE_WATER_WAVES) {
+    #if ENABLE_WATER_WAVES == 1
         // Low-cost, world-anchored normal perturbation; it does not displace geometry.
         float t = frameTimeCounter * 0.62;
         vec3 playerN = normalize(mat3(gbufferModelViewInverse) * viewN);
@@ -33,9 +33,9 @@ void main() {
             0.18 * cos(worldPosition.x * 0.103 - t * 0.8) +
             0.07 * cos((worldPosition.x - worldPosition.z) * 0.083 + t)
         );
-        vec3 perturbedWorldN = normalize(playerN + waveSlope);
-        viewN = normalize(mat3(gbufferModelView) * perturbedWorldN);
-    }
+    vec3 perturbedWorldN = normalize(playerN + waveSlope);
+    viewN = normalize(mat3(gbufferModelView) * perturbedWorldN);
+    #endif
 
     // Retain the alpha supplied by Minecraft so normal translucent blending still applies.
     float alpha = clamp(albedo.a, 0.0, 0.88);

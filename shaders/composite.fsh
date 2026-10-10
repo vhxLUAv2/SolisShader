@@ -1,10 +1,10 @@
 #version 330 compatibility
 
-const bool ENABLE_SHADOWS = true;
-const bool ENABLE_SSR = false;
-const int SHADOW_QUALITY = 1; // 1 = four taps, 2 = nine taps
-const int SSR_STEPS = 6;
-const int shadowMapResolution = 1024;
+#define ENABLE_SHADOWS 1 // [0 1]
+#define ENABLE_SSR 0 // [0 1]
+#define SHADOW_QUALITY 1 // [1 2]
+#define SSR_STEPS 6 // [4 6 8 10]
+const int shadowMapResolution = 1024; // [512 1024 2048 4096]
 
 uniform sampler2D colortex0;
 uniform sampler2D colortex1;
@@ -61,7 +61,8 @@ float filteredShadow(vec3 shadowCoord, vec3 normal, vec3 lightDir) {
     return sum / 9.0;
 }
 
-vec3 screenSpaceReflection(vec3 viewPos, vec3 normal) {
+#if ENABLE_SSR == 1
+vec3 screenSpaceReflection(vec3 viewPos, vec3 normal, out float hitMask) {
     vec3 rayDir = reflect(normalize(viewPos), normalize(normal));
     vec3 reflected = vec3(0.0);
     float found = 0.0;
@@ -90,8 +91,10 @@ vec3 screenSpaceReflection(vec3 viewPos, vec3 normal) {
         found = max(found, hit);
     }
 
+    hitMask = found;
     return reflected;
 }
+#endif
 
 /* DRAWBUFFERS:0 */
 void main() {
@@ -109,7 +112,8 @@ void main() {
         vec3 lightDir = normalize(shadowLightPosition);
         vec3 playerPos = (gbufferModelViewInverse * vec4(viewPos, 1.0)).xyz;
 
-        if (ENABLE_SHADOWS && lightCoordinates.y > 0.01) {
+        #if ENABLE_SHADOWS == 1
+        if (lightCoordinates.y > 0.01) {
             vec4 shadowClip = shadowProjection * shadowModelView * vec4(playerPos, 1.0);
             vec3 shadowCoord = shadowClip.xyz / max(abs(shadowClip.w), 0.0001);
             shadowCoord = shadowCoord * 0.5 + 0.5;
@@ -123,14 +127,17 @@ void main() {
             float wrap = clamp((dot(normal, lightDir) + 0.35) / 1.35, 0.0, 1.0);
             color.rgb += vec3(0.018, 0.052, 0.012) * greenMaterial * wrap * skyInfluence;
         }
+        #endif
 
-        if (ENABLE_SSR && waterMask > 0.02) {
-            vec3 viewPosForSSR = unprojectView(texcoord, depth);
-            vec3 reflected = screenSpaceReflection(viewPosForSSR, normal);
-            float fresnel = 0.12 + 0.42 * pow(1.0 - abs(dot(normal, normalize(viewPosForSSR))), 5.0);
-            float reflectionWeight = clamp(fresnel * waterMask, 0.0, 0.42);
+        #if ENABLE_SSR == 1
+        if (waterMask > 0.02) {
+            float reflectionHit = 0.0;
+            vec3 reflected = screenSpaceReflection(viewPos, normal, reflectionHit);
+            float fresnel = 0.12 + 0.42 * pow(1.0 - abs(dot(normal, normalize(viewPos))), 5.0);
+            float reflectionWeight = clamp(fresnel * waterMask * reflectionHit, 0.0, 0.42);
             color.rgb = mix(color.rgb, reflected, reflectionWeight);
         }
+        #endif
     }
 
     gl_FragData[0] = color;

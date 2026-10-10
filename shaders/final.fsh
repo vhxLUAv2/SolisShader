@@ -1,11 +1,11 @@
 #version 330 compatibility
 
-const bool ENABLE_BLOOM = true;
-const bool ENABLE_ADAPTIVE_EXPOSURE = true;
-const bool ENABLE_DOF = false;
-const bool ENABLE_MOTION_BLUR = false;
-const int MOTION_BLUR_SAMPLES = 4;
-const float BLOOM_STRENGTH = 0.095;
+#define ENABLE_BLOOM 1 // [0 1]
+#define ENABLE_ADAPTIVE_EXPOSURE 1 // [0 1]
+#define ENABLE_DOF 0 // [0 1]
+#define ENABLE_MOTION_BLUR 0 // [0 1]
+#define MOTION_BLUR_SAMPLES 4 // [2 3 4 5 6]
+#define BLOOM_STRENGTH 0.095 // [0.04 0.06 0.08 0.095 0.12 0.15]
 
 uniform sampler2D colortex0;
 uniform sampler2D depthtex0;
@@ -44,7 +44,8 @@ void main() {
     vec2 pixel = 1.0 / vec2(max(viewWidth, 1.0), max(viewHeight, 1.0));
     float depth = texture(depthtex0, texcoord).r;
 
-    if (ENABLE_DOF && depth < 0.999999) {
+    #if ENABLE_DOF == 1
+    if (depth < 0.999999) {
         float focus = clamp(centerDepthSmooth, 0.0, 1.0);
         float radius = clamp(abs(depth - focus) * 90.0, 0.0, 3.0);
         vec2 offset = pixel * radius;
@@ -56,8 +57,10 @@ void main() {
         float amount = smoothstep(0.002, 0.035, abs(depth - focus)) * 0.22;
         color = mix(color, blur * 0.2, amount);
     }
+    #endif
 
-    if (ENABLE_MOTION_BLUR && depth < 0.999999) {
+    #if ENABLE_MOTION_BLUR == 1
+    if (depth < 0.999999) {
         vec3 viewPos = unprojectView(texcoord, depth);
         vec3 playerPos = (gbufferModelViewInverse * vec4(viewPos, 1.0)).xyz;
         vec3 worldPos = cameraPosition + playerPos;
@@ -75,25 +78,23 @@ void main() {
         float amount = clamp(length(velocity) * 20.0, 0.0, 0.30);
         color = mix(color, blur / float(MOTION_BLUR_SAMPLES), amount);
     }
+    #endif
 
-    if (ENABLE_BLOOM) {
-        vec3 bloom = vec3(0.0);
-        bloom += brightPass(texcoord + pixel * vec2( 2.0,  0.0));
-        bloom += brightPass(texcoord + pixel * vec2(-2.0,  0.0));
-        bloom += brightPass(texcoord + pixel * vec2( 0.0,  2.0));
-        bloom += brightPass(texcoord + pixel * vec2( 0.0, -2.0));
-        bloom += brightPass(texcoord + pixel * vec2( 3.0,  3.0));
-        bloom += brightPass(texcoord + pixel * vec2(-3.0,  3.0));
-        bloom += brightPass(texcoord + pixel * vec2( 3.0, -3.0));
-        bloom += brightPass(texcoord + pixel * vec2(-3.0, -3.0));
-        color += bloom * (BLOOM_STRENGTH / 8.0);
-    }
+    #if ENABLE_BLOOM == 1
+    // Four-tap bloom reduces texture fetches while retaining a soft emissive glow.
+    vec3 bloom = vec3(0.0);
+    bloom += brightPass(texcoord + pixel * vec2( 2.0,  0.0));
+    bloom += brightPass(texcoord + pixel * vec2(-2.0,  0.0));
+    bloom += brightPass(texcoord + pixel * vec2( 0.0,  2.0));
+    bloom += brightPass(texcoord + pixel * vec2( 0.0, -2.0));
+    color += bloom * (BLOOM_STRENGTH * 0.25);
+    #endif
 
-    if (ENABLE_ADAPTIVE_EXPOSURE) {
+    #if ENABLE_ADAPTIVE_EXPOSURE == 1
         float localSkyLight = clamp(float(eyeBrightnessSmooth.y) / 240.0, 0.0, 1.0);
         float caveLift = 1.0 - localSkyLight;
         color *= 1.0 + caveLift * 0.17;
-    }
+    #endif
 
     color = acesApprox(color);
 

@@ -1,56 +1,35 @@
 # SolisShader
 
-A performance-aware shader pack for Minecraft Java Edition using the classic Iris/OptiFine GLSL shader-pack pipeline.
-
-**Target version:** Minecraft Java Edition 26.2. The official release line uses the year-based name 26.2 rather than 1.26.2. Use a matching current Iris release; shader-loader and graphics-driver compatibility still needs in-game verification.
+SolisShader is a performance-aware Minecraft Java shader pack for the classic Iris/OptiFine GLSL pipeline. It aims for a cinematic look without defaulting to the most expensive effects.
 
 ## Visual features
 
-- PCF-filtered shadow-map sampling with a low-cost four-tap mode and a higher-quality nine-tap mode.
-- Terrain lightmap preservation, subtle warm grading, and a restrained green-material wrap-lighting approximation.
-- Screen-space water reflections (SSR), enabled in the Ultra profile. SSR is limited by what is visible in the current frame and can miss off-screen objects or sky.
-- Animated world-anchored water-normal perturbation, plus procedural underwater caustic highlights.
-- Height-aware atmospheric fog, a restrained sky tint, and screen-space light shafts toward the sun.
-- Highlight bloom, an ACES-style filmic tone curve, lightmap-informed exposure compensation, optional depth-of-field blur, and optional camera-motion blur.
+- Soft PCF shadow-map filtering with quality presets.
+- Minecraft lightmap-aware terrain shading and subtle warm color grading.
+- Gentle vegetation wrap-lighting approximation.
+- Animated water normal perturbation, optional screen-space reflections, and underwater caustic highlights.
+- Altitude-aware distance fog, sky tinting, and screen-space sun shafts.
+- Four-tap highlight bloom, ACES-style tonemapping, and a lightweight sky-light-informed exposure lift.
+- Optional depth-of-field and camera-motion blur in the Ultra preset.
 
-## Performance profiles
+## Presets
 
-Open Shader Pack Settings and choose a profile:
+- **Low:** minimal post-processing, SSR, DOF, and motion blur disabled for higher frame rates.
+- **Medium:** 1024 shadow map, four-tap PCF, four-tap bloom, four volumetric taps, fog and caustics. SSR and blur remain off.
+- **Ultra:** 2048 shadow map, nine-tap PCF, bounded 8-step shafts/SSR, DOF and motion blur. This preset costs more GPU time.
 
-- **Low:** 512 shadow map, four-tap shadows and expensive visual passes disabled.
-- **Medium:** 1024 shadow map, four-tap shadows, fog, and bloom; SSR and blur disabled.
-- **Ultra:** 2048 shadow map, nine-tap shadows, more volumetric steps, SSR, DOF, and camera-motion blur.
+No fixed FPS can be guaranteed. GPU model alone does not determine performance; resolution, render distance, scene geometry, drivers, other mods, and Minecraft settings matter.
 
-These are relative quality presets, not FPS guarantees. Actual performance depends on resolution, GPU, driver, scene complexity, other mods, and the shader loader. A GTX 1660 or RTX 3060 may perform differently across worlds; 100+ FPS cannot be promised without testing on the target setup.
+## Direct download
 
-## Download and install
+[**Download SolisShader.zip**](https://github.com/vhxLUAv2/SolisShader/raw/refs/heads/main/SolisShader.zip) directly from this repository. No GitHub Actions are required for downloading.
 
-**Direct download:** [Download SolisShader.zip from GitHub Releases](https://github.com/vhxLUAv2/SolisShader/releases/latest/download/SolisShader.zip).
+1. Download the ZIP file.
+2. Keep it compressed and place it in the shaderpacks folder opened from Iris' Shader Packs screen.
+3. Select SolisShader.
 
-1. Download `SolisShader.zip` using the direct link above.
-2. Keep the ZIP compressed and place it in the shaderpacks folder opened from Iris' Shader Packs screen.
-3. Select SolisShader in Minecraft.
+## Notes and compatibility
 
-Each successful push to `main` updates the latest GitHub Release download. Pull requests still validate and package the shader pack without publishing a release.
+This pack uses the conventional `shaders/` layout and GLSL 330 compatibility shaders. Iris documents `composite`, `composite1`, and `final` as fullscreen post-processing programs. Some features are visual approximations: SSR only reflects objects visible in the current frame; the leaf/grass effect is not physically accurate subsurface scattering; exposure is an environment-light lift rather than histogram-based temporal exposure.
 
-The artifact contains a top-level shaders folder, ready for the shader-pack loader.
-
-## Source map
-
-- shaders/gbuffers_terrain.vsh and .fsh — terrain color, lightmap coordinates, and view-space normals.
-- shaders/gbuffers_water.vsh and .fsh — animated water normals and a material mask for SSR.
-- shaders/shadow.vsh and .fsh — alpha-tested shadow-map geometry.
-- shaders/composite.fsh — PCF shadows, vegetation-like wrap lighting, and optional SSR.
-- shaders/composite1.fsh — altitude-aware fog, sky tint, god-ray approximation, and caustics.
-- shaders/final.fsh — optional blur effects, bloom, exposure, tone mapping, and display transfer.
-- shaders/shaders.properties — Low, Medium, and Ultra profiles plus settings menus.
-
-## Validation limits
-
-GitHub Actions checks required files, GLSL syntax where supported by glslangValidator, and ZIP structure. This does not emulate Minecraft's render pipeline. The shader pack has not been confirmed in-game on Minecraft 26.2, Iris, OptiFine, or a specific GPU; verify it with Iris shader debug mode before treating it as release-ready.
-
-## Build artifact
-
-## Build and distribution
-
-The currently published ZIP is a static GitHub Release asset. Download it directly at [SolisShader.zip](https://github.com/vhxLUAv2/SolisShader/releases/download/latest/SolisShader.zip). This repository no longer uses GitHub Actions to build or publish future versions; after source changes, the ZIP must be rebuilt and uploaded manually.
+The source uses compile-time option switches so disabled effects can be removed from shader variants where supported. In-game rendering on a particular Iris/OptiFine version and GPU still needs to be verified.

@@ -1,9 +1,9 @@
 #version 330 compatibility
 
-const bool ENABLE_VOLUMETRICS = true;
-const bool ENABLE_CAUSTICS = true;
-const int VOLUMETRIC_STEPS = 6;
-const float FOG_DENSITY = 0.006;
+#define ENABLE_VOLUMETRICS 1 // [0 1]
+#define ENABLE_CAUSTICS 1 // [0 1]
+#define VOLUMETRIC_STEPS 4 // [3 4 6 8 12]
+#define FOG_DENSITY 0.006 // [0.003 0.004 0.006 0.008 0.010]
 
 uniform sampler2D colortex0;
 uniform sampler2D depthtex0;
@@ -60,7 +60,8 @@ void main() {
         vec3 scatteringColor = mix(fogLinear, vec3(1.0, 0.70, 0.42), phase * 0.22);
         color.rgb = mix(color.rgb, scatteringColor, clamp(fogAmount, 0.0, 0.88));
 
-        if (ENABLE_CAUSTICS && isEyeInWater != 0) {
+        #if ENABLE_CAUSTICS == 1
+        if (isEyeInWater != 0) {
             vec2 p = playerPos.xz * 0.145;
             float t = frameTimeCounter * 0.34;
             float pattern = sin(p.x * 2.0 + sin(p.y * 1.6 + t) + t) *
@@ -68,9 +69,10 @@ void main() {
             float caustic = pow(abs(pattern), 6.0);
             color.rgb *= 1.0 + caustic * 0.13;
         }
+        #endif
     }
 
-    if (ENABLE_VOLUMETRICS) {
+    #if ENABLE_VOLUMETRICS == 1
         vec4 sunClip = gbufferProjection * vec4(sunPosition, 1.0);
         vec2 sunUv = sunClip.xy / max(abs(sunClip.w), 0.0001) * 0.5 + 0.5;
         vec2 boundedSunUv = clamp(sunUv, vec2(0.0), vec2(1.0));
@@ -88,7 +90,7 @@ void main() {
         float sunUp = smoothstep(-0.08, 0.18, worldSun.y);
         float shaftStrength = lightShafts / float(VOLUMETRIC_STEPS) * sunUp * sunInFront * 0.055;
         color.rgb += vec3(1.0, 0.76, 0.50) * shaftStrength;
-    }
+    #endif
 
     gl_FragData[0] = color;
 }

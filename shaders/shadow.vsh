@@ -1,7 +1,7 @@
 #version 330 compatibility
 
-const int shadowMapResolution = 1024;
-const float shadowDistance = 96.0;
+const int shadowMapResolution = 1024; // [512 1024 2048 4096]
+const float shadowDistance = 80.0; // [48.0 64.0 80.0 96.0 128.0]
 
 out vec2 texcoord;
 out vec4 vertexColor;
