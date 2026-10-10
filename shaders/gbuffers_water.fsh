@@ -1,6 +1,7 @@
 #version 330 compatibility
 
 #define ENABLE_WATER_WAVES 1 // [0 1]
+//#define ENABLE_FULLBRIGHT // Ignore block and sky light levels for terrain and water
 
 uniform sampler2D gtexture;
 uniform sampler2D lightmap;
@@ -17,7 +18,14 @@ in vec3 worldPosition;
 /* DRAWBUFFERS:0123 */
 void main() {
     vec4 albedo = texture(gtexture, texcoord) * vertexColor;
-    vec3 light = texture(lightmap, lmcoord).rgb;
+    float fullbrightMask = 0.0;
+    vec3 light;
+    #ifdef ENABLE_FULLBRIGHT
+        light = vec3(1.0);
+        fullbrightMask = 1.0;
+    #else
+        light = texture(lightmap, lmcoord).rgb;
+    #endif
     vec3 waterColor = albedo.rgb * light;
     waterColor *= vec3(0.88, 1.015, 1.08);
 
@@ -40,7 +48,8 @@ void main() {
     // Retain the alpha supplied by Minecraft so normal translucent blending still applies.
     float alpha = clamp(albedo.a, 0.0, 0.88);
     gl_FragData[0] = vec4(waterColor, alpha);
-    gl_FragData[1] = vec4(clamp(lmcoord.xy, 0.0, 1.0), 0.0, 1.0);
+    // Blue marks fullbright pixels so the composite pass can preserve them.
+    gl_FragData[1] = vec4(clamp(lmcoord.xy, 0.0, 1.0), fullbrightMask, 1.0);
     gl_FragData[2] = vec4(normalize(viewN) * 0.5 + 0.5, alpha);
     // With the regular translucent blend state, red becomes a soft water coverage mask.
     gl_FragData[3] = vec4(1.0, 0.0, 0.0, alpha);

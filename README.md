@@ -12,6 +12,10 @@ SolisShader is a performance-aware Minecraft Java shader pack for the classic Ir
 - Four-tap highlight bloom, ACES-style tonemapping, and a lightweight sky-light-informed exposure lift.
 - Optional depth-of-field and camera-motion blur in the Ultra preset.
 
+## Fullbright
+
+Toggle **ENABLE_FULLBRIGHT** in Shader Pack Settings → Visuals to render terrain and water without Minecraft's block/sky lightmap and to skip this pack's shadow darkening on those pixels. It is off by default in all three presets, so you can enable it separately. Atmospheric and distance fog remain active. The toggle currently covers terrain and water programs, not every entity, first-person hand, or particle.
+
 ## Presets
 
 - **Low:** minimal post-processing, SSR, DOF, and motion blur disabled for higher frame rates.

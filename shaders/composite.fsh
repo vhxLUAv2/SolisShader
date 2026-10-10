@@ -103,7 +103,9 @@ void main() {
 
     float depth = texture(depthtex0, texcoord).r;
     vec4 normalSample = texture(colortex2, texcoord);
-    vec2 lightCoordinates = texture(colortex1, texcoord).rg;
+    vec4 lightData = texture(colortex1, texcoord);
+    vec2 lightCoordinates = lightData.rg;
+    float fullbrightMask = lightData.b;
     float waterMask = clamp(texture(colortex3, texcoord).r, 0.0, 1.0);
 
     if (depth < 0.999999 && normalSample.a > 0.5) {
@@ -113,7 +115,7 @@ void main() {
         vec3 playerPos = (gbufferModelViewInverse * vec4(viewPos, 1.0)).xyz;
 
         #if ENABLE_SHADOWS == 1
-        if (lightCoordinates.y > 0.01) {
+        if (lightCoordinates.y > 0.01 && fullbrightMask < 0.5) {
             vec4 shadowClip = shadowProjection * shadowModelView * vec4(playerPos, 1.0);
             vec3 shadowCoord = shadowClip.xyz / max(abs(shadowClip.w), 0.0001);
             shadowCoord = shadowCoord * 0.5 + 0.5;
