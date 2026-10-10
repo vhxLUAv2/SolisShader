@@ -1,32 +1,50 @@
 # SolisShader
 
-SolisShader is a minimal, source-first shader pack for Minecraft Java Edition using the Iris/OptiFine shader-pack format.
+A performance-aware shader pack for Minecraft Java Edition using the classic Iris/OptiFine GLSL shader-pack pipeline.
 
-## Current features
+**Target version:** Minecraft Java Edition 26.2. The official release line uses the year-based name 26.2 rather than 1.26.2. Use a matching current Iris release; shader-loader and graphics-driver compatibility still needs in-game verification.
 
-- Terrain texturing with Minecraft's lightmap preserved.
-- A restrained warm color adjustment.
-- A lightweight composite pass with mild contrast, saturation, and vignette adjustments.
-- No external shader libraries or downloaded assets.
+## Visual features
 
-This is a starter shader pack, not a physically based or feature-heavy shader. It does not currently implement custom shadows, waving foliage, volumetric lighting, reflections, or custom water.
+- PCF-filtered shadow-map sampling with a low-cost four-tap mode and a higher-quality nine-tap mode.
+- Terrain lightmap preservation, subtle warm grading, and a restrained green-material wrap-lighting approximation.
+- Screen-space water reflections (SSR), enabled in the Ultra profile. SSR is limited by what is visible in the current frame and can miss off-screen objects or sky.
+- Animated world-anchored water-normal perturbation, plus procedural underwater caustic highlights.
+- Height-aware atmospheric fog, a restrained sky tint, and screen-space light shafts toward the sun.
+- Highlight bloom, an ACES-style filmic tone curve, lightmap-informed exposure compensation, optional depth-of-field blur, and optional camera-motion blur.
+
+## Performance profiles
+
+Open Shader Pack Settings and choose a profile:
+
+- **Low:** 512 shadow map, four-tap shadows and expensive visual passes disabled.
+- **Medium:** 1024 shadow map, four-tap shadows, fog, and bloom; SSR and blur disabled.
+- **Ultra:** 2048 shadow map, nine-tap shadows, more volumetric steps, SSR, DOF, and camera-motion blur.
+
+These are relative quality presets, not FPS guarantees. Actual performance depends on resolution, GPU, driver, scene complexity, other mods, and the shader loader. A GTX 1660 or RTX 3060 may perform differently across worlds; 100+ FPS cannot be promised without testing on the target setup.
 
 ## Install
 
-1. Download `SolisShader.zip` from the **Artifacts** section of a successful GitHub Actions run.
-2. Keep the ZIP file compressed.
-3. In Minecraft Java Edition, open the shader-pack folder from the Iris Shader Packs screen.
-4. Put `SolisShader.zip` in that folder and select SolisShader.
+1. Download the ZIP artifact from a successful GitHub Actions run.
+2. Keep the ZIP compressed and place it in the shaderpacks folder opened from Iris' Shader Packs screen.
+3. Select SolisShader in Minecraft.
 
-Iris must be installed. Compatibility depends on the Minecraft, Iris, graphics driver, and GPU versions in use.
+The artifact contains a top-level shaders folder, ready for the shader-pack loader.
 
-## Source layout
+## Source map
 
-- `shaders/gbuffers_terrain.vsh` — terrain vertex stage
-- `shaders/gbuffers_terrain.fsh` — terrain fragment stage
-- `shaders/composite.vsh` — fullscreen composite vertex stage
-- `shaders/composite.fsh` — final color adjustment
+- shaders/gbuffers_terrain.vsh and .fsh — terrain color, lightmap coordinates, and view-space normals.
+- shaders/gbuffers_water.vsh and .fsh — animated water normals and a material mask for SSR.
+- shaders/shadow.vsh and .fsh — alpha-tested shadow-map geometry.
+- shaders/composite.fsh — PCF shadows, vegetation-like wrap lighting, and optional SSR.
+- shaders/composite1.fsh — altitude-aware fog, sky tint, god-ray approximation, and caustics.
+- shaders/final.fsh — optional blur effects, bloom, exposure, tone mapping, and display transfer.
+- shaders/shaders.properties — Low, Medium, and Ultra profiles plus settings menus.
 
-## Build and validation
+## Validation limits
 
-GitHub Actions checks the expected source files and basic shader structure, then creates `SolisShader.zip` and uploads it as a workflow artifact. This automated check is not a substitute for launching Minecraft and testing the pack in-game.
+GitHub Actions checks required files, GLSL syntax where supported by glslangValidator, and ZIP structure. This does not emulate Minecraft's render pipeline. The shader pack has not been confirmed in-game on Minecraft 26.2, Iris, OptiFine, or a specific GPU; verify it with Iris shader debug mode before treating it as release-ready.
+
+## Build artifact
+
+Each push to main, pull request, or manual workflow dispatch validates and packages SolisShader.zip. The uploaded workflow artifact is retained for 30 days.

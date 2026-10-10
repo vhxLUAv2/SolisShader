@@ -1,30 +1,35 @@
 #version 330 compatibility
 
+// Shader-pack menu setting; profiles can override this constant.
+const bool ENABLE_TERRAIN_TINT = true;
+
 uniform sampler2D gtexture;
 uniform sampler2D lightmap;
 
 in vec2 texcoord;
 in vec2 lmcoord;
-in vec4 glcolor;
+in vec4 vertexColor;
+in vec3 normalView;
 
-/* RENDERTARGETS: 0 */
-layout(location = 0) out vec4 fragColor;
-
+/* DRAWBUFFERS:0123 */
 void main() {
-    vec4 albedo = texture(gtexture, texcoord) * glcolor;
+    vec4 albedo = texture(gtexture, texcoord) * vertexColor;
     if (albedo.a < 0.1) {
         discard;
     }
 
     vec3 light = texture(lightmap, lmcoord).rgb;
-    vec3 color = albedo.rgb * light;
+    vec3 lit = albedo.rgb * light;
 
-    // Subtle warm daylight tint without replacing Minecraft's lightmap.
-    float daylight = clamp(lmcoord.y, 0.0, 1.0);
-    color.r *= 1.025;
-    color.g *= 1.010;
-    color.b *= 0.985;
-    color *= mix(0.92, 1.04, daylight);
+    if (ENABLE_TERRAIN_TINT) {
+        // Very restrained warmth; Minecraft's lightmap remains the main light source.
+        lit *= vec3(1.018, 1.008, 0.990);
+    }
 
-    fragColor = vec4(color, albedo.a);
+    gl_FragData[0] = vec4(lit, albedo.a);
+    // UVs let later passes distinguish blocklight from sky-light influence.
+    gl_FragData[1] = vec4(clamp(lmcoord.xy, 0.0, 1.0), 0.0, 1.0);
+    gl_FragData[2] = vec4(normalize(normalView) * 0.5 + 0.5, 1.0);
+    // Red is a water-material mask; opaque terrain writes zero.
+    gl_FragData[3] = vec4(0.0);
 }
