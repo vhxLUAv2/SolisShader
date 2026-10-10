@@ -4,6 +4,7 @@ const bool ENABLE_SHADOWS = true;
 const bool ENABLE_SSR = false;
 const int SHADOW_QUALITY = 1; // 1 = four taps, 2 = nine taps
 const int SSR_STEPS = 6;
+const int shadowMapResolution = 1024;
 
 uniform sampler2D colortex0;
 uniform sampler2D colortex1;
