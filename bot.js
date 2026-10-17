@@ -154,6 +154,211 @@ function handleChatAlert(packet) {
   }
 }
 
+
+const playerNamesByUuid = new Map()
+const discordChatQueue = []
+let discordChatTimer = null
+let discordChatInFlight = false
+let chatQueueOverflowWarned = false
+
+function normalizeUuid(uuid) {
+  return typeof uuid === 'string' ? uuid.replace(/-/g, '').toLowerCase() : ''
+}
+
+function readComponentText(value, depth = 0) {
+  if (depth > 14 || value == null) return ''
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        if (parsed && typeof parsed === 'object') return readComponentText(parsed, depth + 1)
+      } catch {}
+    }
+    return value
+  }
+  if (Array.isArray(value)) return value.map(child => readComponentText(child, depth + 1)).join('')
+  if (typeof value !== 'object' || Buffer.isBuffer(value)) return ''
+
+  if (typeof value.type === 'string' && Object.prototype.hasOwnProperty.call(value, 'value')) {
+    if (value.type === 'string') return typeof value.value === 'string' ? value.value : ''
+    if (['byte', 'short', 'int', 'long', 'float', 'double', 'intArray', 'longArray'].includes(value.type)) return ''
+    return readComponentText(value.value, depth + 1)
+  }
+
+  let output = ''
+  if (value.text !== undefined) output += readComponentText(value.text, depth + 1)
+  if (!output && value.player?.name !== undefined) output += readComponentText(value.player.name, depth + 1)
+  for (const key of ['with', 'extra', 'content', 'message']) {
+    if (value[key] !== undefined) output += readComponentText(value[key], depth + 1)
+  }
+  if (output) return output
+
+  const ignored = new Set([
+    'type', 'name', 'id', 'color', 'bold', 'italic', 'underlined', 'strikethrough',
+    'obfuscated', 'font', 'insertion', 'clickEvent', 'hoverEvent', 'show_in_tooltip',
+    'translate', 'fallback', 'score', 'selector', 'keybind', 'nbt', 'interpret', 'separator'
+  ])
+  for (const [key, child] of Object.entries(value)) {
+    if (ignored.has(key)) continue
+    output += readComponentText(child, depth + 1)
+  }
+  return output
+}
+
+function findPlayerSelector(value, depth = 0) {
+  if (depth > 14 || value == null || typeof value !== 'object') return ''
+  if (Array.isArray(value)) {
+    for (const child of value) {
+      const name = findPlayerSelector(child, depth + 1)
+      if (name) return name
+    }
+    return ''
+  }
+  if (typeof value.type === 'string' && Object.prototype.hasOwnProperty.call(value, 'value')) {
+    return findPlayerSelector(value.value, depth + 1)
+  }
+  if (value.player?.name !== undefined) {
+    const name = readComponentText(value.player.name).trim()
+    if (name) return name
+  }
+  for (const [key, child] of Object.entries(value)) {
+    if (['clickEvent', 'hoverEvent', 'style'].includes(key)) continue
+    const name = findPlayerSelector(child, depth + 1)
+    if (name) return name
+  }
+  return ''
+}
+
+function rememberPlayerNames(packet) {
+  if (!Array.isArray(packet?.data)) return
+  const action = packet.action
+  const addsPlayer = action && typeof action === 'object'
+    ? Boolean(action.add_player ?? action.addPlayer)
+    : typeof action === 'number' && Boolean(action & 1)
+
+  for (const entry of packet.data) {
+    const uuid = normalizeUuid(entry?.uuid)
+    const username = entry?.player?.name ?? entry?.profile?.name ?? entry?.username
+    if (uuid && addsPlayer && typeof username === 'string' && /^[A-Za-z0-9_]{3,16}$/.test(username)) {
+      playerNamesByUuid.set(uuid, username)
+    }
+  }
+  while (playerNamesByUuid.size > 500) {
+    playerNamesByUuid.delete(playerNamesByUuid.keys().next().value)
+  }
+}
+
+function forgetPlayerNames(packet) {
+  if (!Array.isArray(packet?.players)) return
+  for (const uuid of packet.players) playerNamesByUuid.delete(normalizeUuid(uuid))
+}
+
+function sendDiscordChat(username, message) {
+  if (!discordWebhook || !username || !message) return
+  const safeUsername = String(username).replace(/[\r\n]/g, '').slice(0, 32)
+  const safeMessage = String(message).replace(/\u0000/g, '').trim().slice(0, 1650)
+  if (!safeUsername || !safeMessage) return
+
+  if (discordChatQueue.length >= 40) {
+    if (!chatQueueOverflowWarned) {
+      console.warn('Discord chat queue is full; further chat messages are temporarily being dropped.')
+      chatQueueOverflowWarned = true
+    }
+    return
+  }
+
+  discordChatQueue.push({
+    content: '**' + safeUsername + '**: ' + safeMessage,
+    allowed_mentions: { parse: [] }
+  })
+  pumpDiscordChatQueue()
+}
+
+function pumpDiscordChatQueue() {
+  if (discordChatInFlight || discordChatTimer || !discordWebhook || discordChatQueue.length === 0) return
+  discordChatTimer = setTimeout(() => {
+    discordChatTimer = null
+    const payload = discordChatQueue.shift()
+    if (!payload) return
+
+    discordChatInFlight = true
+    const body = JSON.stringify(payload)
+    let finished = false
+    const finish = delay => {
+      if (finished) return
+      finished = true
+      discordChatInFlight = false
+      if (discordChatQueue.length < 20) chatQueueOverflowWarned = false
+      if (discordChatQueue.length) {
+        discordChatTimer = setTimeout(() => {
+          discordChatTimer = null
+          pumpDiscordChatQueue()
+        }, delay)
+      }
+    }
+
+    const request = https.request({
+      hostname: discordWebhook.hostname,
+      port: discordWebhook.port || 443,
+      path: discordWebhook.pathname + discordWebhook.search,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body)
+      }
+    }, response => {
+      response.resume()
+      response.on('end', () => {
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          console.warn('Discord chat forwarding failed (HTTP ' + response.statusCode + ').')
+        }
+        finish(response.statusCode === 429 ? 2000 : 650)
+      })
+    })
+
+    request.setTimeout(8000, () => request.destroy(new Error('Discord webhook timed out')))
+    request.on('error', error => {
+      console.warn('Discord chat forwarding failed: ' + error.message)
+      finish(1500)
+    })
+    request.end(body)
+  }, 0)
+}
+
+function handlePlayerChat(packet) {
+  if (typeof packet?.plainMessage !== 'string') return
+  const uuid = normalizeUuid(packet.senderUuid)
+  const username = playerNamesByUuid.get(uuid) ||
+    readComponentText(packet.networkName ?? packet.senderName).trim()
+  if (!username || username.toLowerCase() === config.username.toLowerCase()) return
+  sendDiscordChat(username, packet.plainMessage)
+}
+
+function handleProfilelessChat(packet) {
+  const username = readComponentText(packet?.name).trim()
+  const message = readComponentText(packet?.message).trim()
+  if (!username || !message) return
+  sendDiscordChat(username, message)
+}
+
+function handleSystemPlayerChat(packet) {
+  const username = findPlayerSelector(packet?.content)
+  if (!username) return
+  let message = readComponentText(packet.content).trim()
+  const escapedName = username.replace(/[^A-Za-z0-9_]/g, '')
+  if (!escapedName) return
+  message = message.replace(new RegExp('^\\s*<?' + escapedName + '(?:>|:)\\s*'), '').trim()
+  if (!message) return
+  sendDiscordChat(username, message)
+}
+
+function handleLegacyPlayerChat(packet) {
+  const text = readComponentText(packet?.message).trim()
+  const match = text.match(/^<([A-Za-z0-9_]{3,16})>\s*(.+)$/s)
+  if (match) sendDiscordChat(match[1], match[2])
+}
+
 let activeClient = null
 let reconnectTimer = null
 let movementTimer = null
@@ -384,9 +589,15 @@ function connect() {
   client.on('playerJoin', () => {
     console.log('Login complete; waiting for initial position synchronization.')
   })
-  for (const eventName of ['system_chat', 'player_chat', 'disguised_chat', 'chat']) {
+  for (const eventName of ['system_chat', 'player_chat', 'disguised_chat', 'profileless_chat', 'chat']) {
     client.on(eventName, handleChatAlert)
   }
+  client.on('player_info', rememberPlayerNames)
+  client.on('player_remove', forgetPlayerNames)
+  client.on('player_chat', handlePlayerChat)
+  client.on('system_chat', handleSystemPlayerChat)
+  client.on('profileless_chat', handleProfilelessChat)
+  client.on('chat', handleLegacyPlayerChat)
   client.on('position', packet => handleServerPosition(client, packet))
   client.on('start_configuration', stopMovement)
   client.on('respawn', stopMovement)

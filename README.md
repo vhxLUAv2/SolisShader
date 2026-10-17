@@ -46,7 +46,7 @@ The bot requests a view distance of 2 and minimal particles. Its lightweight mov
 
 ## Discord verification alerts
 
-Create an incoming webhook in your Discord channel, then set `DISCORD_WEBHOOK_URL` in the Bot-Hosting.net environment variables. Keep the webhook URL secret and do not commit the real value to GitHub. When a Falix link or a URL shortly after a verification prompt appears in game chat, the bot posts the link and a short message excerpt to Discord. Duplicate links are suppressed for the current process. This only forwards the alert; it does not open links or complete verification.
+Create an incoming webhook in your Discord channel, then set `DISCORD_WEBHOOK_URL` in the Bot-Hosting.net environment variables. Keep the webhook URL secret and do not commit the real value to GitHub. When a Falix link or a URL shortly after a verification prompt appears in game chat, the bot posts the link and a short message excerpt to Discord. Player chat is also forwarded as `**username**: message`; usernames are resolved from player-info packets when available. The bot also forwards chat messages formatted as system chat with an embedded player selector. Discord chat forwarding is queued to limit request bursts. Duplicate verification links are suppressed for the current process. This only forwards messages and alerts; it does not open links or complete verification.
 
 ## RAM settings
 
