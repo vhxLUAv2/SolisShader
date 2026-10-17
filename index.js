@@ -1,7 +1,21 @@
 'use strict'
 
-const minecraftProtocol = require('@wp2508/minecraft-protocol')
+const mineflayer = require('@wp2508/mineflayer')
+const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
+const { Vec3 } = require('vec3')
 const https = require('https')
+const fs = require('fs')
+const path = require('path')
+
+const FARM_CROPS = {
+  wheat: { blockName: 'wheat', itemName: 'wheat_seeds', maxAge: 7 },
+  carrots: { blockName: 'carrots', itemName: 'carrot', maxAge: 7 },
+  potatoes: { blockName: 'potatoes', itemName: 'potato', maxAge: 7 },
+  beetroots: { blockName: 'beetroots', itemName: 'beetroot_seeds', maxAge: 3 }
+}
+
+const MAX_FARM_BLOCKS = 4096
+const FARM_STATE_PATH = path.join(__dirname, '.farm-region.json')
 
 function readInteger(name, fallback, minimum, maximum) {
   const raw = process.env[name]
@@ -17,6 +31,8 @@ const config = {
   host: (process.env.MC_HOST || 'myawesomeserverwithf.falix.gg').trim(),
   port: readInteger('MC_PORT', 25565, 1, 65535),
   username: (process.env.MC_USERNAME || 'bot').trim(),
+  ownerUsername: (process.env.MC_OWNER_USERNAME || '').trim(),
+  farmCrop: (process.env.FARM_CROP || 'wheat').trim().toLowerCase(),
   version: (process.env.MC_VERSION || '26.3').trim(),
   jumpMinMs: readInteger('JUMP_MIN_SECONDS', 20, 1, 3600) * 1000,
   jumpMaxMs: readInteger('JUMP_MAX_SECONDS', 28, 1, 3600) * 1000,
@@ -30,6 +46,12 @@ if (!/^[A-Za-z0-9_]{3,16}$/.test(config.username)) {
   throw new Error('MC_USERNAME must contain 3–16 letters, numbers, or underscores.')
 }
 if (!config.version) throw new Error('MC_VERSION must not be empty.')
+if (config.ownerUsername && !/^[A-Za-z0-9_]{3,16}$/.test(config.ownerUsername)) {
+  throw new Error('MC_OWNER_USERNAME must contain 3–16 letters, numbers, or underscores when set.')
+}
+if (!Object.prototype.hasOwnProperty.call(FARM_CROPS, config.farmCrop)) {
+  throw new Error('FARM_CROP must be wheat, carrots, potatoes, or beetroots.')
+}
 if (config.jumpMinMs > config.jumpMaxMs) {
   throw new Error('JUMP_MIN_SECONDS must be less than or equal to JUMP_MAX_SECONDS.')
 }
@@ -409,58 +431,440 @@ function handleLegacyPlayerChat(packet) {
   if (match) sendDiscordChat(match[1], match[2])
 }
 
-let activeClient = null
-let reconnectTimer = null
-let movementTimer = null
-let shuttingDown = false
-let movement = null
 
-function newMovementState() {
-  return {
-    ready: false,
-    x: 0,
-    y: 0,
-    z: 0,
-    yaw: 0,
-    pitch: 0,
-    baseY: 0,
-    velocityY: 0,
-    onGround: false,
-    jumping: false,
-    jumpKeyTicks: 0,
-    tick: 0,
-    lastSentTick: 0,
-    lastSentX: 0,
-    lastSentY: 0,
-    lastSentZ: 0,
-    lastSentOnGround: false,
-    nextJumpAt: 0
+let activeBot = null
+let reconnectTimer = null
+let afkJumpTimer = null
+let jumpReleaseTimer = null
+let shuttingDown = false
+
+let farmArea = null
+let selectedCrop = config.farmCrop
+let farmEnabled = false
+let farmSession = 0
+let farmLoopBot = null
+let farmSweepRow = 0
+let farmSweepForward = true
+const farmTargetCooldowns = new Map()
+const recentlyForwardedChat = new Map()
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function safeBotChat(bot, message) {
+  if (!bot || !bot.entity || bot !== activeBot) return
+  try {
+    bot.chat(String(message).slice(0, 240))
+  } catch (error) {
+    console.warn('Could not send an in-game status message: ' + error.message)
   }
+}
+
+function saveFarmState() {
+  try {
+    fs.writeFileSync(FARM_STATE_PATH, JSON.stringify({
+      area: farmArea,
+      crop: selectedCrop,
+      enabled: farmEnabled
+    }, null, 2) + '\n')
+  } catch (error) {
+    console.warn('Could not save farm settings: ' + error.message)
+  }
+}
+
+function normalizeFarmArea(x1, y, z1, x2, z2) {
+  const values = [x1, y, z1, x2, z2]
+  if (!values.every(Number.isSafeInteger)) throw new Error('Farm coordinates must be whole numbers.')
+  const minX = Math.min(x1, x2)
+  const maxX = Math.max(x1, x2)
+  const minZ = Math.min(z1, z2)
+  const maxZ = Math.max(z1, z2)
+  const areaSize = (maxX - minX + 1) * (maxZ - minZ + 1)
+  if (!Number.isSafeInteger(areaSize) || areaSize > MAX_FARM_BLOCKS) {
+    throw new Error('Farm area is too large. Limit it to ' + MAX_FARM_BLOCKS + ' crop blocks.')
+  }
+  if (y < -64 || y > 320) throw new Error('Crop Y coordinate must be between -64 and 320.')
+  return { minX, maxX, minZ, maxZ, y }
+}
+
+function loadFarmState() {
+  try {
+    const state = JSON.parse(fs.readFileSync(FARM_STATE_PATH, 'utf8'))
+    if (state.area) {
+      farmArea = normalizeFarmArea(
+        state.area.minX,
+        state.area.y,
+        state.area.minZ,
+        state.area.maxX,
+        state.area.maxZ
+      )
+    }
+    if (typeof state.crop === 'string' && Object.prototype.hasOwnProperty.call(FARM_CROPS, state.crop)) {
+      selectedCrop = state.crop
+    }
+    farmEnabled = Boolean(state.enabled && farmArea)
+    console.log(farmArea
+      ? 'Loaded saved farm area: ' + farmArea.minX + ',' + farmArea.y + ',' + farmArea.minZ +
+        ' to ' + farmArea.maxX + ',' + farmArea.y + ',' + farmArea.maxZ
+      : 'No farm area saved yet. Use #farm area to configure one.')
+  } catch (error) {
+    if (error.code !== 'ENOENT') console.warn('Could not load saved farm settings: ' + error.message)
+  }
+}
+
+function cropInfoForBlock(block) {
+  if (!block) return null
+  return Object.values(FARM_CROPS).find(crop => crop.blockName === block.name) || null
+}
+
+function cropAge(block) {
+  if (!block) return -1
+  let properties = {}
+  if (typeof block.getProperties === 'function') {
+    try {
+      properties = block.getProperties() || {}
+    } catch {}
+  }
+  const age = Number(properties.age ?? block.metadata ?? -1)
+  return Number.isFinite(age) ? age : -1
+}
+
+function targetCooldownKey(target) {
+  return target.kind + ':' + target.pos.x + ',' + target.pos.y + ',' + target.pos.z
+}
+
+function scanFarm(bot) {
+  const targets = []
+  let unknownBlocks = 0
+  const now = Date.now()
+  const items = bot.inventory.items()
+
+  for (let x = farmArea.minX; x <= farmArea.maxX; x++) {
+    for (let z = farmArea.minZ; z <= farmArea.maxZ; z++) {
+      const pos = new Vec3(x, farmArea.y, z)
+      const block = bot.blockAt(pos)
+      if (!block) {
+        unknownBlocks++
+        continue
+      }
+
+      const crop = cropInfoForBlock(block)
+      if (crop) {
+        if (cropAge(block) >= crop.maxAge) {
+          const target = { kind: 'harvest', pos, crop }
+          if ((farmTargetCooldowns.get(targetCooldownKey(target)) || 0) <= now) targets.push(target)
+        }
+        continue
+      }
+
+      if (block.name !== 'air') continue
+      const soil = bot.blockAt(pos.offset(0, -1, 0))
+      if (!soil) {
+        unknownBlocks++
+        continue
+      }
+      if (soil.name !== 'farmland') continue
+
+      const plantingCrop = FARM_CROPS[selectedCrop]
+      if (items.some(item => item.name === plantingCrop.itemName)) {
+        const target = { kind: 'plant', pos, crop: plantingCrop }
+        if ((farmTargetCooldowns.get(targetCooldownKey(target)) || 0) <= now) targets.push(target)
+      }
+    }
+  }
+
+  const botPos = bot.entity.position
+  targets.sort((a, b) => {
+    const priority = (a.kind === 'harvest' ? 0 : 1) - (b.kind === 'harvest' ? 0 : 1)
+    if (priority !== 0) return priority
+    return botPos.distanceTo(a.pos) - botPos.distanceTo(b.pos)
+  })
+  return { targets, unknownBlocks }
+}
+
+function isFarmSessionCurrent(bot, session) {
+  return !shuttingDown &&
+    farmEnabled &&
+    farmArea !== null &&
+    activeBot === bot &&
+    farmSession === session &&
+    bot.entity != null
+}
+
+async function plantCropAt(bot, pos, crop) {
+  const block = bot.blockAt(pos)
+  const soil = bot.blockAt(pos.offset(0, -1, 0))
+  if (!block || block.name !== 'air' || !soil || soil.name !== 'farmland') return false
+  const seed = bot.inventory.items().find(item => item.name === crop.itemName)
+  if (!seed) return false
+  await bot.equip(seed, 'hand')
+  await bot.placeBlock(soil, new Vec3(0, 1, 0))
+  return true
+}
+
+function nextFarmSweepAnchor() {
+  const rowZ = farmArea.minZ + farmSweepRow
+  const x = farmSweepForward ? farmArea.minX : farmArea.maxX
+  if (farmSweepRow >= farmArea.maxZ - farmArea.minZ) {
+    farmSweepRow = 0
+    farmSweepForward = !farmSweepForward
+  } else {
+    farmSweepRow++
+  }
+  return new Vec3(x, farmArea.y, rowZ)
+}
+
+async function runFarmLoop(bot, session) {
+  let lastUnknownNotice = 0
+  while (isFarmSessionCurrent(bot, session)) {
+    const scan = scanFarm(bot)
+    if (scan.targets.length === 0) {
+      if (scan.unknownBlocks > 0) {
+        const now = Date.now()
+        if (now - lastUnknownNotice > 60000) {
+          console.log('Some farm blocks are not loaded yet; moving through the plot to load more chunks.')
+          lastUnknownNotice = now
+        }
+        try {
+          const anchor = nextFarmSweepAnchor()
+          await bot.pathfinder.goto(new goals.GoalNear(anchor.x, anchor.y, anchor.z, 1))
+        } catch (error) {
+          if (isFarmSessionCurrent(bot, session)) {
+            console.warn('Farm scan movement failed: ' + error.message)
+            await sleep(1500)
+          }
+        }
+      } else {
+        await sleep(2500)
+      }
+      continue
+    }
+
+    const target = scan.targets[0]
+    const key = targetCooldownKey(target)
+    try {
+      await bot.pathfinder.goto(new goals.GoalBlock(target.pos.x, target.pos.y, target.pos.z))
+      if (!isFarmSessionCurrent(bot, session)) break
+
+      if (target.kind === 'harvest') {
+        const block = bot.blockAt(target.pos)
+        const crop = cropInfoForBlock(block)
+        if (!crop || cropAge(block) < crop.maxAge) {
+          farmTargetCooldowns.delete(key)
+          continue
+        }
+
+        await bot.dig(block)
+        await sleep(180)
+        if (!isFarmSessionCurrent(bot, session)) break
+        const replanted = await plantCropAt(bot, target.pos, crop)
+        if (replanted) {
+          console.log('Harvested and replanted ' + crop.blockName + ' at ' +
+            target.pos.x + ',' + target.pos.y + ',' + target.pos.z)
+        } else {
+          console.log('Harvested ' + crop.blockName + ' at ' +
+            target.pos.x + ',' + target.pos.y + ',' + target.pos.z +
+            '; waiting for ' + crop.itemName + ' before replanting.')
+        }
+      } else {
+        await plantCropAt(bot, target.pos, target.crop)
+      }
+
+      farmTargetCooldowns.delete(key)
+      await sleep(250)
+    } catch (error) {
+      farmTargetCooldowns.set(key, Date.now() + 15000)
+      console.warn('Farm action failed at ' + target.pos.x + ',' + target.pos.y + ',' +
+        target.pos.z + ': ' + error.message)
+      await sleep(1000)
+    }
+  }
+}
+
+function startFarmLoop(bot) {
+  if (!farmEnabled || !farmArea || !bot || !bot.entity || activeBot !== bot || farmLoopBot === bot) return
+  farmSession++
+  const session = farmSession
+  farmLoopBot = bot
+  if (afkJumpTimer) clearTimeout(afkJumpTimer)
+  afkJumpTimer = null
+  if (jumpReleaseTimer) clearTimeout(jumpReleaseTimer)
+  jumpReleaseTimer = null
+  try {
+    bot.setControlState('jump', false)
+    bot.setControlState('forward', false)
+  } catch {}
+  console.log('Crop farming started.')
+  void runFarmLoop(bot, session).catch(error => {
+    console.warn('Farm loop stopped after an error: ' + error.message)
+  }).finally(() => {
+    if (farmLoopBot === bot) farmLoopBot = null
+    if (farmEnabled && activeBot && activeBot.entity && farmLoopBot !== activeBot) {
+      startFarmLoop(activeBot)
+    }
+  })
+}
+
+function stopFarmLoop(bot) {
+  farmSession++
+  farmLoopBot = null
+  if (bot && bot.pathfinder) {
+    try {
+      bot.pathfinder.stop()
+    } catch {}
+    try {
+      bot.clearControlStates()
+    } catch {}
+  }
+}
+
+function enableFarm(bot) {
+  if (!farmArea) {
+    safeBotChat(bot, 'Set the crop plot first: #farm area <x1> <y> <z1> <x2> <z2>')
+    return
+  }
+  farmEnabled = true
+  saveFarmState()
+  startFarmLoop(bot)
+  safeBotChat(bot, 'Crop farming enabled. Use #farm status to check the plot.')
+}
+
+function handleFarmCommand(bot, username, message) {
+  const trimmed = String(message || '').trim()
+  if (!/^#farm(?:\s|$)/i.test(trimmed)) return false
+  if (config.ownerUsername && username.toLowerCase() !== config.ownerUsername.toLowerCase()) return true
+
+  const parts = trimmed.split(/\s+/)
+  const action = (parts[1] || 'help').toLowerCase()
+  if (action === 'area') {
+    if (parts.length !== 7) {
+      safeBotChat(bot, 'Usage: #farm area <x1> <y> <z1> <x2> <z2>')
+      return true
+    }
+    const coords = parts.slice(2).map(Number)
+    if (!coords.every(Number.isSafeInteger)) {
+      safeBotChat(bot, 'Farm coordinates must be whole numbers.')
+      return true
+    }
+    try {
+      farmArea = normalizeFarmArea(coords[0], coords[1], coords[2], coords[3], coords[4])
+      farmSweepRow = 0
+      farmSweepForward = true
+      farmTargetCooldowns.clear()
+      farmEnabled = true
+      saveFarmState()
+      safeBotChat(bot, 'Farm plot saved (' + (farmArea.maxX - farmArea.minX + 1) + ' x ' +
+        (farmArea.maxZ - farmArea.minZ + 1) + '). Farming started.')
+      startFarmLoop(bot)
+    } catch (error) {
+      safeBotChat(bot, error.message)
+    }
+    return true
+  }
+
+  if (action === 'start') {
+    enableFarm(bot)
+    return true
+  }
+
+  if (action === 'stop') {
+    farmEnabled = false
+    saveFarmState()
+    stopFarmLoop(bot)
+    scheduleAfkJump(bot)
+    safeBotChat(bot, 'Crop farming paused. Use #farm start to resume.')
+    return true
+  }
+
+  if (action === 'crop') {
+    const crop = (parts[2] || '').toLowerCase()
+    if (!Object.prototype.hasOwnProperty.call(FARM_CROPS, crop)) {
+      safeBotChat(bot, 'Choose a crop: wheat, carrots, potatoes, or beetroots.')
+      return true
+    }
+    selectedCrop = crop
+    saveFarmState()
+    safeBotChat(bot, 'Empty farmland will be planted with ' + crop + '.')
+    return true
+  }
+
+  if (action === 'status') {
+    const areaText = farmArea
+      ? 'x=' + farmArea.minX + '..' + farmArea.maxX + ', y=' + farmArea.y +
+        ', z=' + farmArea.minZ + '..' + farmArea.maxZ
+      : 'not set'
+    safeBotChat(bot, 'Farm ' + (farmEnabled ? 'running' : 'paused') +
+      '; area: ' + areaText + '; empty plots: ' + selectedCrop + '.')
+    return true
+  }
+
+  safeBotChat(bot, 'Commands: #farm area <x1> <y> <z1> <x2> <z2> | #farm start | #farm stop | #farm crop <wheat|carrots|potatoes|beetroots> | #farm status')
+  return true
+}
+
+function forwardPlayerChat(bot, username, message) {
+  if (!username || username.toLowerCase() === config.username.toLowerCase()) return
+  const safeMessage = String(message || '').trim()
+  if (!safeMessage) return
+
+  const key = username + '\u0000' + safeMessage
+  const now = Date.now()
+  const previous = recentlyForwardedChat.get(key)
+  if (previous && now - previous < 2000) return
+  recentlyForwardedChat.set(key, now)
+  if (recentlyForwardedChat.size > 100) {
+    for (const [chatKey, timestamp] of recentlyForwardedChat) {
+      if (now - timestamp > 10000) recentlyForwardedChat.delete(chatKey)
+      if (recentlyForwardedChat.size <= 80) break
+    }
+  }
+
+  const isFarmCommand = handleFarmCommand(bot, username, safeMessage)
+  if (!isFarmCommand) sendDiscordChat(username, safeMessage)
 }
 
 function randomJumpDelay() {
   return config.jumpMinMs + Math.floor(Math.random() * (config.jumpMaxMs - config.jumpMinMs + 1))
 }
 
-function relativeFlag(flags, axis, bit) {
-  if (flags && typeof flags === 'object') return Boolean(flags[axis])
-  return typeof flags === 'number' && Boolean(flags & bit)
+function scheduleAfkJump(bot) {
+  if (afkJumpTimer) clearTimeout(afkJumpTimer)
+  afkJumpTimer = null
+  if (shuttingDown || farmEnabled || !bot || !bot.entity || activeBot !== bot) return
+
+  afkJumpTimer = setTimeout(() => {
+    afkJumpTimer = null
+    if (activeBot === bot && !farmEnabled && bot.entity) {
+      try {
+        bot.setControlState('jump', true)
+        if (jumpReleaseTimer) clearTimeout(jumpReleaseTimer)
+        jumpReleaseTimer = setTimeout(() => {
+          jumpReleaseTimer = null
+          if (activeBot === bot && bot.entity) {
+            try {
+              bot.setControlState('jump', false)
+            } catch {}
+          }
+        }, 250)
+      } catch {}
+    }
+    scheduleAfkJump(bot)
+  }, randomJumpDelay())
 }
 
 function formatReason(reason) {
   if (reason == null) return 'no reason supplied'
   if (typeof reason === 'string') return reason
   try {
+    if (typeof reason.toString === 'function') {
+      const text = reason.toString()
+      if (text && text !== '[object Object]') return text
+    }
     return JSON.stringify(reason)
   } catch {
     return String(reason)
   }
-}
-
-function stopMovement() {
-  if (movementTimer) clearInterval(movementTimer)
-  movementTimer = null
-  if (movement) movement.ready = false
 }
 
 function scheduleReconnect() {
@@ -471,173 +875,36 @@ function scheduleReconnect() {
   }, config.reconnectDelayMs)
 }
 
-function sendMovement(client, name) {
-  client.write(name, {
-    x: movement.x,
-    y: movement.y,
-    z: movement.z,
-    yaw: movement.yaw,
-    pitch: movement.pitch,
-    onGround: movement.onGround,
-    tick: movement.tick,
-    flags: {
-      onGround: movement.onGround,
-      hasHorizontalCollision: false
-    }
-  })
-}
-
-function handleServerPosition(client, packet) {
-  if (activeClient !== client || client.ended) return
-
-  const flags = packet.flags
-  const x = relativeFlag(flags, 'x', 1) ? movement.x + packet.x : packet.x
-  const y = relativeFlag(flags, 'y', 2) ? movement.y + packet.y : packet.y
-  const z = relativeFlag(flags, 'z', 4) ? movement.z + packet.z : packet.z
-  const yaw = relativeFlag(flags, 'yaw', 8) ? movement.yaw + packet.yaw : packet.yaw
-  const pitch = relativeFlag(flags, 'pitch', 16) ? movement.pitch + packet.pitch : packet.pitch
-
-  if (![x, y, z, yaw, pitch].every(Number.isFinite)) {
-    console.warn('Ignored a server position update with invalid coordinates.')
-    return
-  }
-
-  movement.x = x
-  movement.y = y
-  movement.z = z
-  movement.yaw = yaw
-  movement.pitch = pitch
-  movement.baseY = y
-  movement.velocityY = 0
-  movement.onGround = true
-  movement.jumping = false
-  movement.jumpKeyTicks = 0
-  movement.nextJumpAt = Date.now() + randomJumpDelay()
-
-  client.write('teleport_confirm', {
-    teleportId: packet.teleportId,
-    x,
-    y,
-    z,
-    yaw,
-    pitch
-  })
-
-  movement.lastSentX = x
-  movement.lastSentY = y
-  movement.lastSentZ = z
-  movement.lastSentOnGround = false
-  movement.lastSentTick = movement.tick
-  sendMovement(client, 'position_look')
-
-  if (!movement.ready) {
-    movement.ready = true
-    movementTimer = setInterval(() => tick(client), 50)
-    console.log('Position synchronized. Low-memory AFK jumping is active.')
-  }
-}
-
-function tick(client) {
-  if (shuttingDown || activeClient !== client || client.ended || !movement?.ready || client.state !== 'play') return
-
-  movement.tick++
-  const now = Date.now()
-
-  if (!movement.jumping && movement.onGround && now >= movement.nextJumpAt) {
-    movement.jumping = true
-    movement.onGround = false
-    movement.velocityY = 0.42
-    movement.jumpKeyTicks = 2
-    movement.nextJumpAt = now + randomJumpDelay()
-  }
-
-  if (movement.jumping) {
-    movement.y += movement.velocityY
-    movement.velocityY = (movement.velocityY - 0.08) * 0.98
-    if (movement.velocityY < 0 && movement.y <= movement.baseY) {
-      movement.y = movement.baseY
-      movement.velocityY = 0
-      movement.jumping = false
-      movement.onGround = true
-    }
-  }
-
-  const jump = movement.jumpKeyTicks > 0
-  if (movement.jumpKeyTicks > 0) movement.jumpKeyTicks--
-
-  client.write('player_input', {
-    inputs: {
-      forward: false,
-      backward: false,
-      left: false,
-      right: false,
-      jump,
-      shift: false,
-      sprint: false
-    }
-  })
-
-  const positionChanged = movement.x !== movement.lastSentX ||
-    movement.y !== movement.lastSentY ||
-    movement.z !== movement.lastSentZ ||
-    movement.tick - movement.lastSentTick >= 20
-
-  if (positionChanged) {
-    sendMovement(client, 'position')
-    movement.lastSentX = movement.x
-    movement.lastSentY = movement.y
-    movement.lastSentZ = movement.z
-    movement.lastSentOnGround = movement.onGround
-    movement.lastSentTick = movement.tick
-  } else if (movement.onGround !== movement.lastSentOnGround) {
-    client.write('flying', {
-      onGround: movement.onGround,
-      flags: {
-        onGround: movement.onGround,
-        hasHorizontalCollision: false
-      }
-    })
-    movement.lastSentOnGround = movement.onGround
-  }
-
-  client.write('tick_end', {})
-}
-
 function connect() {
-  if (shuttingDown || activeClient) return
+  if (shuttingDown || activeBot) return
+  console.log('Connecting to ' + config.host + ':' + config.port + ' as ' +
+    config.username + ' (Minecraft ' + config.version + ')...')
 
-  movement = newMovementState()
-  console.log(`Connecting to ${config.host}:${config.port} as ${config.username} (Minecraft ${config.version})...`)
-
-  let client
+  let bot
   try {
-    client = minecraftProtocol.createClient({
+    bot = mineflayer.createBot({
       host: config.host,
       port: config.port,
       username: config.username,
       auth: 'offline',
       version: config.version,
       keepAlive: true,
-      clientSettings: {
-        locale: 'en_us',
-        viewDistance: 2,
-        chatFlags: 0,
-        chatColors: false,
-        skinParts: 0,
-        enableTextFiltering: false,
-        enableServerListing: false,
-        particleStatus: 'minimal'
-      }
+      checkTimeoutInterval: 30000,
+      viewDistance: 4,
+      hideErrors: true
     })
+    bot.loadPlugin(pathfinder)
   } catch (error) {
-    console.error('Could not start the connection:', error.message)
+    console.error('Could not start the connection: ' + error.message)
     scheduleReconnect()
     return
   }
 
-  activeClient = client
+  activeBot = bot
   let thisClientReachedOnline = false
-  client.on('playerJoin', () => {
+
+  bot.on('spawn', () => {
+    if (activeBot !== bot) return
     if (!thisClientReachedOnline) {
       thisClientReachedOnline = true
       const wasOnlineBefore = hasBeenOnline
@@ -652,30 +919,70 @@ function connect() {
       hasBeenOnline = true
       initialOfflineAlertSent = false
     }
-    console.log('Login complete; waiting for initial position synchronization.')
+
+    try {
+      const movements = new Movements(bot, bot.registry)
+      movements.canDig = false
+      bot.pathfinder.setMovements(movements)
+      bot.settings.viewDistance = 4
+      bot.settings.particleStatus = 'minimal'
+    } catch (error) {
+      console.warn('Could not configure pathfinding: ' + error.message)
+    }
+
+    console.log('Connected and spawned. Use #farm help in Minecraft chat.')
+    if (farmEnabled && farmArea) startFarmLoop(bot)
+    else scheduleAfkJump(bot)
   })
-  for (const eventName of ['system_chat', 'player_chat', 'disguised_chat', 'profileless_chat', 'chat']) {
-    client.on(eventName, handleChatAlert)
-  }
-  client.on('player_info', rememberPlayerNames)
-  client.on('player_remove', forgetPlayerNames)
-  client.on('player_chat', handlePlayerChat)
-  client.on('system_chat', handleSystemPlayerChat)
-  client.on('profileless_chat', handleProfilelessChat)
-  client.on('chat', handleLegacyPlayerChat)
-  client.on('position', packet => handleServerPosition(client, packet))
-  client.on('start_configuration', stopMovement)
-  client.on('respawn', stopMovement)
-  client.on('disconnect', packet => {
-    console.warn('Server disconnected the bot:', formatReason(packet?.reason ?? packet))
+
+  bot.on('death', () => {
+    farmSession++
+    if (farmLoopBot === bot) farmLoopBot = null
+    try {
+      bot.pathfinder.stop()
+      bot.clearControlStates()
+    } catch {}
   })
-  client.on('error', error => {
+
+  bot.on('message', message => {
+    const text = message && typeof message.toString === 'function'
+      ? message.toString()
+      : String(message || '')
+    if (text) handleChatAlert(text)
+    const match = text.match(/^<([A-Za-z0-9_]{3,16})>\s*(.+)$/s)
+    if (match) forwardPlayerChat(bot, match[1], match[2])
+  })
+
+  bot.on('chat', (username, message) => {
+    forwardPlayerChat(bot, username, message)
+  })
+
+  bot.on('whisper', (username, message) => {
+    handleFarmCommand(bot, username, message)
+  })
+
+  bot.on('kicked', reason => {
+    console.warn('Server disconnected the bot:', formatReason(reason))
+  })
+
+  bot.on('error', error => {
     console.error('Connection error:', error.message || formatReason(error))
   })
-  client.on('end', reason => {
-    stopMovement()
-    if (activeClient === client) activeClient = null
-    console.warn(`Disconnected: ${formatReason(reason)}`)
+
+  bot.on('end', reason => {
+    if (afkJumpTimer) clearTimeout(afkJumpTimer)
+    if (jumpReleaseTimer) clearTimeout(jumpReleaseTimer)
+    afkJumpTimer = null
+    jumpReleaseTimer = null
+    farmSession++
+    if (farmLoopBot === bot) farmLoopBot = null
+    try {
+      bot.pathfinder.stop()
+      bot.clearControlStates()
+    } catch {}
+    if (activeBot === bot) activeBot = null
+
+    console.warn('Disconnected: ' + formatReason(reason))
     if (!shuttingDown && thisClientReachedOnline) {
       sendDiscordServerStatus(
         'Minecraft Server Offline / Connection Lost',
@@ -686,7 +993,8 @@ function connect() {
     } else if (!shuttingDown && !hasBeenOnline && !initialOfflineAlertSent) {
       sendDiscordServerStatus(
         'Minecraft Server Unreachable',
-        'The bot could not complete its initial connection to ' + config.host + ':' + config.port + '. The server may be stopped, starting, or temporarily unreachable. Connection attempts will continue.',
+        'The bot could not complete its initial connection to ' + config.host + ':' + config.port +
+          '. The server may be stopped, starting, or temporarily unreachable. Connection attempts will continue.',
         0xFEE75C
       )
       initialOfflineAlertSent = true
@@ -698,24 +1006,26 @@ function connect() {
 function shutdown() {
   if (shuttingDown) return
   shuttingDown = true
-  stopMovement()
+  saveFarmState()
+  if (afkJumpTimer) clearTimeout(afkJumpTimer)
+  if (jumpReleaseTimer) clearTimeout(jumpReleaseTimer)
   clearTimeout(reconnectTimer)
   reconnectTimer = null
+  stopFarmLoop(activeBot)
 
-  const client = activeClient
-  activeClient = null
-  if (client) {
+  const bot = activeBot
+  activeBot = null
+  if (bot) {
     try {
-      client.end('AFK bot stopped')
+      bot.quit('AFK farm bot stopped')
     } catch (error) {
-      console.error('Error while stopping:', error.message)
+      console.error('Error while stopping: ' + error.message)
     }
   }
-
-  console.log('AFK bot stopped.')
+  console.log('Bot stopped.')
 }
 
+loadFarmState()
 process.once('SIGINT', shutdown)
 process.once('SIGTERM', shutdown)
-
 connect()
