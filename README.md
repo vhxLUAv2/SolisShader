@@ -40,8 +40,13 @@ Run `npm run check` to check JavaScript syntax.
 | `JUMP_MIN_SECONDS` | `20` | Minimum interval between jumps |
 | `JUMP_MAX_SECONDS` | `28` | Maximum interval between jumps |
 | `RECONNECT_DELAY_SECONDS` | `10` | Reconnect delay |
+| `DISCORD_WEBHOOK_URL` | empty | Optional Discord incoming webhook URL |
 
 The bot requests a view distance of 2 and minimal particles. Its lightweight movement loop sends protocol movement/input packets, a tick-end packet, and a position heartbeat every 20 ticks. It does not retain incoming chunks or track other entities.
+
+## Discord verification alerts
+
+Create an incoming webhook in your Discord channel, then set `DISCORD_WEBHOOK_URL` in the Bot-Hosting.net environment variables. Keep the webhook URL secret and do not commit the real value to GitHub. When a Falix link or a URL shortly after a verification prompt appears in game chat, the bot posts the link and a short message excerpt to Discord. Duplicate links are suppressed for the current process. This only forwards the alert; it does not open links or complete verification.
 
 ## RAM settings
 

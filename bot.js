@@ -1,6 +1,7 @@
 'use strict'
 
 const minecraftProtocol = require('@wp2508/minecraft-protocol')
+const https = require('https')
 
 function readInteger(name, fallback, minimum, maximum) {
   const raw = process.env[name]
@@ -19,7 +20,8 @@ const config = {
   version: (process.env.MC_VERSION || '26.3').trim(),
   jumpMinMs: readInteger('JUMP_MIN_SECONDS', 20, 1, 3600) * 1000,
   jumpMaxMs: readInteger('JUMP_MAX_SECONDS', 28, 1, 3600) * 1000,
-  reconnectDelayMs: readInteger('RECONNECT_DELAY_SECONDS', 10, 1, 3600) * 1000
+  reconnectDelayMs: readInteger('RECONNECT_DELAY_SECONDS', 10, 1, 3600) * 1000,
+  discordWebhookUrl: (process.env.DISCORD_WEBHOOK_URL || '').trim()
 }
 
 if (!config.host) throw new Error('MC_HOST must not be empty.')
@@ -29,6 +31,127 @@ if (!/^[A-Za-z0-9_]{3,16}$/.test(config.username)) {
 if (!config.version) throw new Error('MC_VERSION must not be empty.')
 if (config.jumpMinMs > config.jumpMaxMs) {
   throw new Error('JUMP_MIN_SECONDS must be less than or equal to JUMP_MAX_SECONDS.')
+}
+
+
+let discordWebhook = null
+const alertedVerificationLinks = new Set()
+let verificationPromptUntil = 0
+
+if (config.discordWebhookUrl) {
+  try {
+    const parsedWebhook = new URL(config.discordWebhookUrl)
+    if (
+      parsedWebhook.protocol !== 'https:' ||
+      !['discord.com', 'discordapp.com'].includes(parsedWebhook.hostname) ||
+      !/^\/api\/webhooks\/\d+\/[^/]+\/?$/.test(parsedWebhook.pathname)
+    ) {
+      throw new Error('Invalid Discord webhook URL')
+    }
+    discordWebhook = parsedWebhook
+  } catch {
+    console.warn('Discord alerts disabled: DISCORD_WEBHOOK_URL must be a valid HTTPS Discord webhook URL.')
+  }
+}
+
+function collectChatStrings(value, output, visited, depth = 0) {
+  if (output.length >= 128 || depth > 12) return
+  if (typeof value === 'string') {
+    output.push(value.slice(0, 3000))
+    return
+  }
+  if (!value || typeof value !== 'object' || Buffer.isBuffer(value) || visited.has(value)) return
+
+  visited.add(value)
+  if (Array.isArray(value)) {
+    for (const child of value) collectChatStrings(child, output, visited, depth + 1)
+    return
+  }
+
+  for (const [key, child] of Object.entries(value)) {
+    if (['signature', 'previousMessages', 'lastSeenMessages'].includes(key)) continue
+    collectChatStrings(child, output, visited, depth + 1)
+  }
+}
+
+function sendDiscordVerificationAlert(url, message) {
+  if (alertedVerificationLinks.has(url)) return
+  if (alertedVerificationLinks.size >= 100) {
+    alertedVerificationLinks.delete(alertedVerificationLinks.values().next().value)
+  }
+  alertedVerificationLinks.add(url)
+
+  if (!discordWebhook) {
+    console.warn('Falix verification link detected. Set DISCORD_WEBHOOK_URL to forward it: ' + url)
+    return
+  }
+
+  const summary = message.replace(/\s+/g, ' ').slice(0, 600)
+  const content = [
+    '**Falix hosting verification detected**',
+    'Minecraft server: ' + config.host,
+    'Verification link: ' + url,
+    summary ? 'In-game message: ' + summary : ''
+  ].filter(Boolean).join('\n').slice(0, 1900)
+  const body = JSON.stringify({
+    content,
+    allowed_mentions: { parse: [] }
+  })
+
+  const request = https.request({
+    hostname: discordWebhook.hostname,
+    port: discordWebhook.port || 443,
+    path: discordWebhook.pathname + discordWebhook.search,
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body)
+    }
+  }, response => {
+    response.resume()
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      console.warn('Discord webhook rejected the verification alert (HTTP ' + response.statusCode + ').')
+      return
+    }
+    console.log('Forwarded Falix verification link to Discord.')
+  })
+
+  request.setTimeout(8000, () => request.destroy(new Error('Discord webhook timed out')))
+  request.on('error', error => {
+    console.warn('Discord webhook delivery failed: ' + error.message)
+  })
+}
+
+function handleChatAlert(packet) {
+  const parts = []
+  collectChatStrings(packet, parts, new Set())
+  const message = parts.join(' ').replace(/\s+/g, ' ').trim()
+  if (!message) return
+
+  const verificationContext = /(falix|verif(?:y|ication)|captcha|add\s+time|extend.{0,30}timer|keep.{0,50}server.{0,30}running|server.{0,40}(?:stop|shutdown|suspend|expire))/i.test(message)
+  if (verificationContext) verificationPromptUntil = Date.now() + 60000
+
+  const urls = message.match(/https?:\/\/[^\s<>"']+/gi) || []
+  for (const candidate of new Set(urls)) {
+    const url = candidate.replace(/[.,!?;:)\]}]+$/, '')
+    let parsed
+    try {
+      parsed = new URL(url)
+    } catch {
+      continue
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') continue
+
+    const host = parsed.hostname.toLowerCase()
+    const isFalixLink = host === 'falix.gg' ||
+      host.endsWith('.falix.gg') ||
+      host === 'falixnodes.net' ||
+      host.endsWith('.falixnodes.net')
+
+    if (isFalixLink || Date.now() <= verificationPromptUntil) {
+      sendDiscordVerificationAlert(url, message)
+    }
+  }
 }
 
 let activeClient = null
@@ -261,6 +384,9 @@ function connect() {
   client.on('playerJoin', () => {
     console.log('Login complete; waiting for initial position synchronization.')
   })
+  for (const eventName of ['system_chat', 'player_chat', 'disguised_chat', 'chat']) {
+    client.on(eventName, handleChatAlert)
+  }
   client.on('position', packet => handleServerPosition(client, packet))
   client.on('start_configuration', stopMovement)
   client.on('respawn', stopMovement)
