@@ -1,1 +1,0 @@
-GitHub automation for SolisShader lives in the workflows directory.

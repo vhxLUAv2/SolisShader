@@ -1,43 +1,57 @@
-# SolisShader
+# Solis AFK Bot
 
-SolisShader is a performance-aware Minecraft Java shader pack for the classic Iris/OptiFine GLSL pipeline. It aims for a cinematic look without defaulting to the most expensive effects.
+A lightweight Minecraft Java Edition AFK bot for servers that permit offline-mode players. It joins with a configurable username, makes a short jump at a randomized interval, and reconnects after disconnects.
 
-## Visual features
+## Requirements
 
-- Soft PCF shadow-map filtering with quality presets.
-- Minecraft lightmap-aware terrain shading and subtle warm color grading.
-- Gentle vegetation wrap-lighting approximation.
-- Animated water normal perturbation, optional screen-space reflections, and underwater caustic highlights.
-- Altitude-aware distance fog, sky tinting, and screen-space sun shafts.
-- Four-tap highlight bloom, ACES-style tonemapping, and a lightweight sky-light-informed exposure lift.
-- Optional depth-of-field and camera-motion blur in the Ultra preset.
+- Node.js 22.9 or newer
+- A Minecraft Java Edition 26.3 server that accepts offline-mode connections
+- Permission from the server owner to keep a bot connected
 
-## X-ray
+## Setup
 
-Enable **ENABLE_XRAY** in Shader Pack Settings → Visuals to show mapped vanilla ores through ordinary terrain. X-ray temporarily removes terrain distance fog and lights the remaining ore surfaces so they are visible underground. It is off by default in all presets. The mapping includes coal, copper, iron, gold, redstone, emerald, lapis, diamond, nether quartz/gold ores, and ancient debris. This affects the terrain program; entities, particles, and some non-solid or cutout layers may still appear normally.
+1. Install Node.js.
+2. Clone or download this repository.
+3. In this directory, copy `.env.example` to `.env`.
+4. Edit `.env` and set your server address and the bot username.
+5. Run:
 
-## Fullbright
+```sh
+npm install
+npm start
+```
 
-Toggle **ENABLE_FULLBRIGHT** in Shader Pack Settings → Visuals to render terrain and water without Minecraft's block/sky lightmap and to skip this pack's shadow darkening on those pixels. It is off by default in all three presets, so you can enable it separately. Atmospheric and distance fog remain active. The toggle currently covers terrain and water programs, not every entity, first-person hand, or particle.
+On Windows PowerShell, copy the settings file with:
 
-## Presets
+```powershell
+Copy-Item .env.example .env
+```
 
-- **Low:** minimal post-processing, SSR, DOF, and motion blur disabled for higher frame rates.
-- **Medium:** 1024 shadow map, four-tap PCF, four-tap bloom, four volumetric taps, fog and caustics. SSR and blur remain off.
-- **Ultra:** 2048 shadow map, nine-tap PCF, bounded 8-step shafts/SSR, DOF and motion blur. This preset costs more GPU time.
+## Settings
 
-No fixed FPS can be guaranteed. GPU model alone does not determine performance; resolution, render distance, scene geometry, drivers, other mods, and Minecraft settings matter.
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MC_HOST` | `127.0.0.1` | Server IP or hostname |
+| `MC_PORT` | `25565` | Java server port |
+| `MC_USERNAME` | `SolisAFKBot` | Offline-mode player name |
+| `MC_VERSION` | `26.3` | Minecraft protocol version |
+| `JUMP_MIN_SECONDS` | `25` | Minimum delay between jumps |
+| `JUMP_MAX_SECONDS` | `40` | Maximum delay between jumps |
+| `RECONNECT_DELAY_SECONDS` | `10` | Delay before reconnecting |
 
-## Direct download
+The bot only jumps when it is on the ground. It does not walk around, send chat messages, or interact with blocks. Jump timing is randomized within the configured range.
 
-[**Download the repository ZIP directly from GitHub**](https://github.com/vhxLUAv2/SolisShader/archive/refs/heads/main.zip). No GitHub Actions are required.
+## Server requirements
 
-1. Download and extract the ZIP.
-2. Move the extracted `SolisShader-main` folder into the Minecraft `shaderpacks` folder opened from Iris' Shader Packs screen.
-3. Select SolisShader from the shader list. The repository archive is a source snapshot, so use the extracted folder rather than selecting the repository ZIP itself.
+The server must already allow offline-mode connections. The bot uses offline authentication; it does not change the server's `online-mode` setting, whitelist, or permissions. Offline-mode usernames are not authenticated by Microsoft, so only use this on a server you control or are authorized to join.
 
-## Notes and compatibility
+## Troubleshooting
 
-This pack uses the conventional `shaders/` layout and GLSL 330 compatibility shaders. Iris documents `composite`, `composite1`, and `final` as fullscreen post-processing programs. Some features are visual approximations: SSR only reflects objects visible in the current frame; the leaf/grass effect is not physically accurate subsurface scattering; exposure is an environment-light lift rather than histogram-based temporal exposure.
+- Confirm `MC_HOST` and `MC_PORT` match the Java server address.
+- Ensure the server accepts offline-mode players and that the configured username is not already online.
+- If the server rejects Minecraft 26.3, check the server software and protocol compatibility before changing `MC_VERSION`.
+- The bot reconnects after ordinary disconnects, but it cannot bypass bans, whitelist restrictions, or server-side connection limits.
 
-The source uses compile-time option switches so disabled effects can be removed from shader variants where supported. In-game rendering on a particular Iris/OptiFine version and GPU still needs to be verified.
+## Validate
+
+Run `npm run check` to check the bot's JavaScript syntax.
