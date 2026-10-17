@@ -90,15 +90,35 @@ function sendDiscordVerificationAlert(url, message) {
     return
   }
 
-  const summary = message.replace(/\s+/g, ' ').slice(0, 600)
-  const content = [
-    '**Falix hosting verification detected**',
-    'Minecraft server: ' + config.host,
-    'Verification link: ' + url,
-    summary ? 'In-game message: ' + summary : ''
-  ].filter(Boolean).join('\n').slice(0, 1900)
+  const summary = message.replace(/\\s+/g, ' ').trim().slice(0, 900)
+  const safeHost = config.host.replace(/`/g, '')
   const body = JSON.stringify({
-    content,
+    embeds: [{
+      title: 'Falix Hosting Verification Required',
+      description: 'The Minecraft hosting service is requesting verification to keep your server running.\n\n[**Open verification link**](' + url + ')',
+      color: 0xF0B232,
+      fields: [
+        {
+          name: 'Minecraft Server',
+          value: '`' + safeHost + '`',
+          inline: true
+        },
+        {
+          name: 'Action Needed',
+          value: 'Open the verification link above and complete the requested check.',
+          inline: true
+        },
+        ...(summary ? [{
+          name: 'Original Server Message',
+          value: summary,
+          inline: false
+        }] : [])
+      ],
+      footer: {
+        text: 'Solis AFK Bot • Verification Alerts'
+      },
+      timestamp: new Date().toISOString()
+    }],
     allowed_mentions: { parse: [] }
   })
 
