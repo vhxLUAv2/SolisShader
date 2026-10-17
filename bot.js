@@ -21,7 +21,8 @@ const config = {
   jumpMinMs: readInteger('JUMP_MIN_SECONDS', 20, 1, 3600) * 1000,
   jumpMaxMs: readInteger('JUMP_MAX_SECONDS', 28, 1, 3600) * 1000,
   reconnectDelayMs: readInteger('RECONNECT_DELAY_SECONDS', 10, 1, 3600) * 1000,
-  discordWebhookUrl: (process.env.DISCORD_WEBHOOK_URL || '').trim()
+  discordWebhookUrl: (process.env.DISCORD_WEBHOOK_URL || '').trim(),
+  verificationWebhookUrl: (process.env.DISCORD_VERIFICATION_WEBHOOK_URL || '').trim()
 }
 
 if (!config.host) throw new Error('MC_HOST must not be empty.')
@@ -34,13 +35,10 @@ if (config.jumpMinMs > config.jumpMaxMs) {
 }
 
 
-let discordWebhook = null
-const alertedVerificationLinks = new Set()
-let verificationPromptUntil = 0
-
-if (config.discordWebhookUrl) {
+function parseDiscordWebhook(value, settingName) {
+  if (!value) return null
   try {
-    const parsedWebhook = new URL(config.discordWebhookUrl)
+    const parsedWebhook = new URL(value)
     if (
       parsedWebhook.protocol !== 'https:' ||
       !['discord.com', 'discordapp.com'].includes(parsedWebhook.hostname) ||
@@ -48,11 +46,17 @@ if (config.discordWebhookUrl) {
     ) {
       throw new Error('Invalid Discord webhook URL')
     }
-    discordWebhook = parsedWebhook
+    return parsedWebhook
   } catch {
-    console.warn('Discord alerts disabled: DISCORD_WEBHOOK_URL must be a valid HTTPS Discord webhook URL.')
+    console.warn(settingName + ' disabled: it must be a valid HTTPS Discord webhook URL.')
+    return null
   }
 }
+
+const discordWebhook = parseDiscordWebhook(config.discordWebhookUrl, 'DISCORD_WEBHOOK_URL')
+const verificationWebhook = parseDiscordWebhook(config.verificationWebhookUrl, 'DISCORD_VERIFICATION_WEBHOOK_URL')
+const alertedVerificationLinks = new Set()
+let verificationPromptUntil = 0
 
 function collectChatStrings(value, output, visited, depth = 0) {
   if (output.length >= 128 || depth > 12) return
@@ -81,8 +85,8 @@ function sendDiscordVerificationAlert(url, message) {
   }
   alertedVerificationLinks.add(url)
 
-  if (!discordWebhook) {
-    console.warn('Falix verification link detected. Set DISCORD_WEBHOOK_URL to forward it: ' + url)
+  if (!verificationWebhook) {
+    console.warn('Falix verification link detected. Set DISCORD_VERIFICATION_WEBHOOK_URL to send it to a dedicated Discord channel: ' + url)
     return
   }
 
@@ -99,9 +103,9 @@ function sendDiscordVerificationAlert(url, message) {
   })
 
   const request = https.request({
-    hostname: discordWebhook.hostname,
-    port: discordWebhook.port || 443,
-    path: discordWebhook.pathname + discordWebhook.search,
+    hostname: verificationWebhook.hostname,
+    port: verificationWebhook.port || 443,
+    path: verificationWebhook.pathname + verificationWebhook.search,
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -120,6 +124,7 @@ function sendDiscordVerificationAlert(url, message) {
   request.on('error', error => {
     console.warn('Discord webhook delivery failed: ' + error.message)
   })
+  request.end(body)
 }
 
 function handleChatAlert(packet) {
