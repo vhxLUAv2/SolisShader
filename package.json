@@ -3,10 +3,10 @@
   "version": "1.1.0",
   "private": true,
   "description": "A low-memory Minecraft Java 26.3 AFK jumping bot for offline-mode servers",
-  "main": "bot.js",
+  "main": "index.js",
   "scripts": {
-    "start": "node --max-old-space-size=128 --env-file-if-exists=.env bot.js",
-    "check": "node --check bot.js"
+    "start": "node --max-old-space-size=128 --env-file-if-exists=.env index.js",
+    "check": "node --check index.js"
   },
   "engines": {
     "node": ">=22.9.0"

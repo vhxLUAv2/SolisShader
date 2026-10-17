@@ -11,9 +11,9 @@ The server must accept offline-mode players. The bot does not change server sett
 ## Bot-Hosting.net setup
 
 1. Stop the server process.
-2. Delete the existing `node_modules` directory once to remove the failed/old Mineflayer installation and free its disk space. Keep `package.json` and `bot.js`.
-3. Set the startup file to `bot.js`.
-4. Start the server. The panel can run `npm install --no-fund --no-audit` and then `node bot.js`; both the server and username already have defaults in the code.
+2. Delete the existing `node_modules` directory once to remove the failed/old Mineflayer installation and free its disk space. Keep `package.json` and `index.js`.
+3. Set the startup file to `index.js`.
+4. Start the server. The panel can run `npm install --no-fund --no-audit` and then `node index.js`; both the server and username already have defaults in the code.
 
 The server address and bot name are already set, so a `.env` file is not required on the hosting panel. To override the defaults, set the variables below in the panel's environment settings.
 
@@ -51,6 +51,6 @@ Create an incoming webhook in your Discord chat/status channel and set `DISCORD_
 
 ## RAM settings
 
-The local `npm start` command caps the V8 old-space heap at 128 MB. If the hosting panel launches `node bot.js` directly, set `NODE_OPTIONS=--max-old-space-size=128` in the panel's environment variables to apply the same heap limit there. This limits the JavaScript heap, not total process RAM. Do not set a heap cap above your hosting plan's memory budget.
+The local `npm start` command caps the V8 old-space heap at 128 MB. If the hosting panel launches `node index.js` directly, set `NODE_OPTIONS=--max-old-space-size=128` in the panel's environment variables to apply the same heap limit there. This limits the JavaScript heap, not total process RAM. Do not set a heap cap above your hosting plan's memory budget.
 
 If the server has a non-default port, set `MC_PORT` in the panel. If the server rejects protocol 26.3 or the connection is kicked, check the exact server version and its offline-mode/idle rules. Protocol compatibility and live joining still need testing on the target server.
