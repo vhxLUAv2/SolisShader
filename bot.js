@@ -18,8 +18,8 @@ const config = {
   port: readInteger('MC_PORT', 25565, 1, 65535),
   username: (process.env.MC_USERNAME || 'SolisAFKBot').trim(),
   version: (process.env.MC_VERSION || '26.3').trim(),
-  jumpMinMs: readInteger('JUMP_MIN_SECONDS', 25, 1, 3600) * 1000,
-  jumpMaxMs: readInteger('JUMP_MAX_SECONDS', 40, 1, 3600) * 1000,
+  jumpMinMs: readInteger('JUMP_MIN_SECONDS', 20, 1, 3600) * 1000,
+  jumpMaxMs: readInteger('JUMP_MAX_SECONDS', 28, 1, 3600) * 1000,
   reconnectDelayMs: readInteger('RECONNECT_DELAY_SECONDS', 10, 1, 3600) * 1000
 }
 

@@ -35,8 +35,8 @@ Copy-Item .env.example .env
 | `MC_PORT` | `25565` | Java server port |
 | `MC_USERNAME` | `SolisAFKBot` | Offline-mode player name |
 | `MC_VERSION` | `26.3` | Minecraft protocol version |
-| `JUMP_MIN_SECONDS` | `25` | Minimum delay between jumps |
-| `JUMP_MAX_SECONDS` | `40` | Maximum delay between jumps |
+| `JUMP_MIN_SECONDS` | `20` | Minimum delay between jumps |
+| `JUMP_MAX_SECONDS` | `28` | Maximum delay between jumps |
 | `RECONNECT_DELAY_SECONDS` | `10` | Delay before reconnecting |
 
 The bot only jumps when it is on the ground. It does not walk around, send chat messages, or interact with blocks. Jump timing is randomized within the configured range.
