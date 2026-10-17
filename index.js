@@ -443,6 +443,7 @@ let selectedCrop = config.farmCrop
 let farmEnabled = false
 let farmSession = 0
 let farmLoopBot = null
+let farmLoopSession = 0
 let farmSweepRow = 0
 let farmSweepForward = true
 const farmTargetCooldowns = new Map()
@@ -617,6 +618,7 @@ function nextFarmSweepAnchor() {
 
 async function runFarmLoop(bot, session) {
   let lastUnknownNotice = 0
+  let lastSweepFailure = 0
   while (isFarmSessionCurrent(bot, session)) {
     const scan = scanFarm(bot)
     if (scan.targets.length === 0) {
@@ -631,8 +633,12 @@ async function runFarmLoop(bot, session) {
           await bot.pathfinder.goto(new goals.GoalNear(anchor.x, anchor.y, anchor.z, 1))
         } catch (error) {
           if (isFarmSessionCurrent(bot, session)) {
-            console.warn('Farm scan movement failed: ' + error.message)
-            await sleep(1500)
+            const failureTime = Date.now()
+            if (failureTime - lastSweepFailure > 30000) {
+              console.warn('Farm scan movement failed: ' + error.message)
+              lastSweepFailure = failureTime
+            }
+            await sleep(5000)
           }
         }
       } else {
@@ -687,6 +693,7 @@ function startFarmLoop(bot) {
   farmSession++
   const session = farmSession
   farmLoopBot = bot
+  farmLoopSession = session
   if (afkJumpTimer) clearTimeout(afkJumpTimer)
   afkJumpTimer = null
   if (jumpReleaseTimer) clearTimeout(jumpReleaseTimer)
@@ -699,7 +706,7 @@ function startFarmLoop(bot) {
   void runFarmLoop(bot, session).catch(error => {
     console.warn('Farm loop stopped after an error: ' + error.message)
   }).finally(() => {
-    if (farmLoopBot === bot) farmLoopBot = null
+    if (farmLoopBot === bot && farmLoopSession === session) farmLoopBot = null
     if (farmEnabled && activeBot && activeBot.entity && farmLoopBot !== activeBot) {
       startFarmLoop(activeBot)
     }
