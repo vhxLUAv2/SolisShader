@@ -1,57 +1,50 @@
 # Solis AFK Bot
 
-A lightweight Minecraft Java Edition AFK bot for servers that permit offline-mode players. It joins with a configurable username, makes a short jump at a randomized interval, and reconnects after disconnects.
+A small Minecraft Java Edition 26.3 AFK jumper intended for low-storage and low-memory hosting panels. It uses the Minecraft protocol client directly instead of Mineflayer, so it does not keep a world, chunk, block, inventory, or entity model in memory.
 
-## Requirements
+## Defaults
 
-- Node.js 22.9 or newer
-- A Minecraft Java Edition 26.3 server that accepts offline-mode connections
-- Permission from the server owner to keep a bot connected
+The bot connects to `myawesomeserverwithf.falix.gg:25565) as `bot`, using offline-mode authentication and Minecraft `26.3`. It jumps at randomized intervals of 20–28 seconds and retries after a disconnect, waiting 10 seconds by default.
 
-## Setup
+The server must accept offline-mode players. The bot does not change server settings or bypass bans, whitelists, account authentication, or connection limits. Use it only on a server where you are allowed to keep an AFK client connected.
 
-1. Install Node.js.
-2. Clone or download this repository.
-3. In this directory, copy `.env.example` to `.env`.
-4. Edit `.env` and set your server address and the bot username.
-5. Run:
+## Bot-Hosting.net setup
 
-```sh
+1. Stop the server process.
+2. Delete the existing `node_modules` directory once to remove the failed/old Mineflayer installation. Keep `package.json` and `bot.js`.
+3. Set the startup file to `bot.js`.
+4. Start the server. The panel can run `npm install --no-fund --no-audit` and then `node bot.js`; both the server and username already have defaults in the code.
+
+The server address and bot name are already set, so a `.env` file is not required on the hosting panel. To override the defaults, set the variables below in the panel's environment settings.
+
+## Local setup
+
+Requires Node.js 22 or newer. In the repository directory:
+
+```powershell
+Copy-Item .env.example .env
 npm install
 npm start
 ```
 
-On Windows PowerShell, copy the settings file with:
+Run `npm run check` to check JavaScript syntax.
 
-```powershell
-Copy-Item .env.example .env
-```
-
-## Settings
+## Environment variables
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `MC_HOST` | `127.0.0.1` | Server IP or hostname |
+| `MC_HOST` | `myawesomeserverwithf.falix.gg` | Server hostname |
 | `MC_PORT` | `25565` | Java server port |
-| `MC_USERNAME` | `SolisAFKBot` | Offline-mode player name |
+| `MC_USERNAME` | `bot` | Offline-mode username |
 | `MC_VERSION` | `26.3` | Minecraft protocol version |
-| `JUMP_MIN_SECONDS` | `20` | Minimum delay between jumps |
-| `JUMP_MAX_SECONDS` | `28` | Maximum delay between jumps |
-| `RECONNECT_DELAY_SECONDS` | `10` | Delay before reconnecting |
+| `JUMP_MIN_SECONDS` | `20` | Minimum interval between jumps |
+| `JUMP_MAX_SECONDS` | `28` | Maximum interval between jumps |
+| `RECONNECT_DELAY_SECONDS` | `10` | Reconnect delay |
 
-The bot only jumps when it is on the ground. It does not walk around, send chat messages, or interact with blocks. Jump timing is randomized within the configured range.
+The bot requests a view distance of 2 and minimal particles. Its lightweight movement loop sends protocol movement/input packets, a tick-end packet, and a position heartbeat every 20 ticks. It does not retain incoming chunks or track other entities.
 
-## Server requirements
+## RAM settings
 
-The server must already allow offline-mode connections. The bot uses offline authentication; it does not change the server's `online-mode` setting, whitelist, or permissions. Offline-mode usernames are not authenticated by Microsoft, so only use this on a server you control or are authorized to join.
+The local `npm start` command caps the V8 old-space heap at 128 MB. If the hosting panel launches `node bot.js` directly, add `NODE_OPTIONS=--max-old-space-size=128` to the panel's environment variables to apply the same heap limit there. This limits the JavaScript heap, not total process RAM. Do not set a heap cap above your hosting plan's memory budget.
 
-## Troubleshooting
-
-- Confirm `MC_HOST` and `MC_PORT` match the Java server address.
-- Ensure the server accepts offline-mode players and that the configured username is not already online.
-- If the server rejects Minecraft 26.3, check the server software and protocol compatibility before changing `MC_VERSION`.
-- The bot reconnects after ordinary disconnects, but it cannot bypass bans, whitelist restrictions, or server-side connection limits.
-
-## Validate
-
-Run `npm run check` to check the bot's JavaScript syntax.
+If the server has a non-default port, set `MC_PORT` in the panel. If the server rejects protocol 26.3 or the connection is kicked, check the exact server version and its offline-mode/idle rules. Protocol compatibility and live joining still need testing on the target server.
