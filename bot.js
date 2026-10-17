@@ -155,6 +155,47 @@ function handleChatAlert(packet) {
 }
 
 
+
+let hasBeenOnline = false
+let initialOfflineAlertSent = false
+
+function sendDiscordServerStatus(title, details, color) {
+  if (!discordWebhook) return
+
+  const body = JSON.stringify({
+    embeds: [{
+      title: title.slice(0, 256),
+      description: details.slice(0, 3500),
+      color,
+      timestamp: new Date().toISOString(),
+      footer: { text: 'Solis AFK Bot · ' + config.host }
+    }],
+    allowed_mentions: { parse: [] }
+  })
+
+  const request = https.request({
+    hostname: discordWebhook.hostname,
+    port: discordWebhook.port || 443,
+    path: discordWebhook.pathname + discordWebhook.search,
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body)
+    }
+  }, response => {
+    response.resume()
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      console.warn('Discord server-status alert rejected (HTTP ' + response.statusCode + ').')
+    }
+  })
+
+  request.setTimeout(8000, () => request.destroy(new Error('Discord webhook timed out')))
+  request.on('error', error => {
+    console.warn('Discord server-status alert failed: ' + error.message)
+  })
+  request.end(body)
+}
+
 const playerNamesByUuid = new Map()
 const discordChatQueue = []
 let discordChatTimer = null
@@ -268,8 +309,12 @@ function sendDiscordChat(username, message) {
     return
   }
 
+  if (!/^[A-Za-z0-9_]{3,16}$/.test(safeUsername)) return
+
   discordChatQueue.push({
-    content: '**' + safeUsername + '**: ' + safeMessage,
+    username: safeUsername,
+    avatar_url: 'https://mc-heads.net/avatar/' + encodeURIComponent(safeUsername) + '/64.png',
+    content: safeMessage,
     allowed_mentions: { parse: [] }
   })
   pumpDiscordChatQueue()
@@ -586,7 +631,22 @@ function connect() {
   }
 
   activeClient = client
+  let thisClientReachedOnline = false
   client.on('playerJoin', () => {
+    if (!thisClientReachedOnline) {
+      thisClientReachedOnline = true
+      const wasOnlineBefore = hasBeenOnline
+      const wasUnreachable = initialOfflineAlertSent
+      const title = wasOnlineBefore || wasUnreachable
+        ? 'Minecraft Server Back Online'
+        : 'Minecraft Server Online'
+      const details = wasOnlineBefore || wasUnreachable
+        ? 'The bot successfully connected again after a previous disconnect. This may indicate a server restart or a temporary network interruption.'
+        : 'The bot connected successfully to ' + config.host + ':' + config.port + '.'
+      sendDiscordServerStatus(title, details, 0x57F287)
+      hasBeenOnline = true
+      initialOfflineAlertSent = false
+    }
     console.log('Login complete; waiting for initial position synchronization.')
   })
   for (const eventName of ['system_chat', 'player_chat', 'disguised_chat', 'profileless_chat', 'chat']) {
@@ -611,6 +671,21 @@ function connect() {
     stopMovement()
     if (activeClient === client) activeClient = null
     console.warn(`Disconnected: ${formatReason(reason)}`)
+    if (!shuttingDown && thisClientReachedOnline) {
+      sendDiscordServerStatus(
+        'Minecraft Server Offline / Connection Lost',
+        'The active Minecraft connection ended. The server may have been stopped or restarted, or there may be a network interruption. The bot will keep trying to reconnect.',
+        0xED4245
+      )
+      initialOfflineAlertSent = true
+    } else if (!shuttingDown && !hasBeenOnline && !initialOfflineAlertSent) {
+      sendDiscordServerStatus(
+        'Minecraft Server Unreachable',
+        'The bot could not complete its initial connection to ' + config.host + ':' + config.port + '. The server may be stopped, starting, or temporarily unreachable. Connection attempts will continue.',
+        0xFEE75C
+      )
+      initialOfflineAlertSent = true
+    }
     scheduleReconnect()
   })
 }
