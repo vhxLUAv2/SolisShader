@@ -755,7 +755,9 @@ function handleFarmCommand(bot, username, message) {
       return true
     }
     try {
-      farmArea = normalizeFarmArea(coords[0], coords[1], coords[2], coords[3], coords[4])
+      const nextArea = normalizeFarmArea(coords[0], coords[1], coords[2], coords[3], coords[4])
+      stopFarmLoop(bot)
+      farmArea = nextArea
       farmSweepRow = 0
       farmSweepForward = true
       farmTargetCooldowns.clear()
@@ -791,7 +793,10 @@ function handleFarmCommand(bot, username, message) {
       return true
     }
     selectedCrop = crop
+    farmTargetCooldowns.clear()
+    if (farmEnabled) stopFarmLoop(bot)
     saveFarmState()
+    if (farmEnabled) startFarmLoop(bot)
     safeBotChat(bot, 'Empty farmland will be planted with ' + crop + '.')
     return true
   }
