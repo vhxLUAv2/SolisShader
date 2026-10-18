@@ -25,9 +25,12 @@ for (const [extension, base64] of formats) {
   const blocks = JSON.parse(loaded.getNonAirBlocksJson())
   const stairs = blocks.find(block => block.name === 'minecraft:oak_stairs')
   assert.ok(stairs, `Missing stairs after ${extension} round-trip`)
-  assert.equal(String(stairs.properties.facing), 'east', JSON.stringify(stairs))
-  assert.equal(String(stairs.properties.half), 'bottom')
-  assert.equal(String(stairs.properties.shape), 'straight')
+  const properties = Array.isArray(stairs.properties)
+    ? Object.fromEntries(stairs.properties)
+    : stairs.properties
+  assert.equal(String(properties.facing), 'east', JSON.stringify(stairs))
+  assert.equal(String(properties.half), 'bottom')
+  assert.equal(String(properties.shape), 'straight')
 
   const entities = JSON.parse(loaded.getAllBlockEntitiesJson())
   const chestEntity = entities.find(entity => {
