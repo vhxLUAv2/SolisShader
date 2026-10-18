@@ -23,14 +23,15 @@ for (const [extension, base64] of formats) {
   assert.ok(bytes.length > 0, `Empty ${extension} export`)
 
   const loaded = Schematic.fromData(bytes)
-  const blocks = loaded.blocks()
+  const blocks = JSON.parse(loaded.getNonAirBlocksJson())
   const stairs = blocks.find(block => block.name === 'minecraft:oak_stairs')
   assert.ok(stairs, `Missing stairs after ${extension} round-trip`)
   assert.equal(String(stairs.properties.facing), 'east')
   assert.equal(String(stairs.properties.half), 'bottom')
   assert.equal(String(stairs.properties.shape), 'straight')
 
-  const chestEntity = loaded.getAllBlockEntities().find(entity => {
+  const entities = JSON.parse(loaded.getAllBlockEntitiesJson())
+  const chestEntity = entities.find(entity => {
     const position = entity.position
     return Array.isArray(position) && position[0] === 1 && position[1] === 0 && position[2] === 0
   })
