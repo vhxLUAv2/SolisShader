@@ -37,7 +37,7 @@ async function loadSchematic(file) {
   const bytes = fs.readFileSync(file)
   let schematic
   try {
-    schematic = Schematic.fromData(Array.from(bytes))
+    schematic = Schematic.fromData(bytes)
   } catch (error) {
     throw new Error('Could not parse .schem/.litematic data: ' + error.message)
   }
@@ -146,10 +146,23 @@ function facingVector(facing) {
   return vectors[String(facing || '').toLowerCase()] || null
 }
 
-function supportDirections(properties = {}) {
+function supportDirections(block) {
+  const name = block.name
+  const properties = block.properties || {}
   if (properties.face === 'floor') return [new Vec3(0, 1, 0)]
   if (properties.face === 'ceiling') return [new Vec3(0, -1, 0)]
   if (properties.face === 'wall' && facingVector(properties.facing)) return [facingVector(properties.facing)]
+
+  // Logs/pillars orient from the face clicked, so prioritize the requested axis.
+  if (properties.axis === 'x') return [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 1, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)]
+  if (properties.axis === 'z') return [new Vec3(0, 0, 1), new Vec3(0, 0, -1), new Vec3(0, 1, 0), new Vec3(1, 0, 0), new Vec3(-1, 0, 0)]
+
+  // Slab halves are easier to select from a side face using the click height.
+  const sideFaces = [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)]
+  if (name.endsWith('_slab') && ['top', 'bottom'].includes(properties.type)) {
+    return [...sideFaces, new Vec3(0, 1, 0), new Vec3(0, -1, 0)]
+  }
+
   const result = [new Vec3(0, 1, 0)]
   const preferred = facingVector(properties.facing)
   if (preferred && Math.abs(preferred.y) === 0) result.push(preferred)
@@ -163,6 +176,50 @@ function supportDirections(properties = {}) {
   return result
 }
 
+function isAutoPlacedCompanion(block) {
+  const name = block.name
+  const properties = block.properties || {}
+  if (name.endsWith('_bed') && properties.part === 'head') return true
+  if (properties.half === 'upper') {
+    if (name.endsWith('_door')) return true
+    if ([
+      'minecraft:sunflower', 'minecraft:lilac', 'minecraft:rose_bush',
+      'minecraft:peony', 'minecraft:tall_grass', 'minecraft:large_fern',
+      'minecraft:pitcher_plant', 'minecraft:tall_seagrass'
+    ].includes(name)) return true
+  }
+  return false
+}
+
+function neighborDerivedProperties(name) {
+  if (name === 'minecraft:chest' || name === 'minecraft:trapped_chest') return new Set(['type'])
+  if (name === 'minecraft:rail' || name.endsWith('_rail')) return new Set(['shape', 'powered'])
+  if (name.endsWith('_stairs')) return new Set(['shape'])
+  if (name.endsWith('_fence') || name.endsWith('_pane') ||
+      name.endsWith('_wall') || name === 'minecraft:iron_bars') {
+    return new Set(['north', 'east', 'south', 'west', 'up'])
+  }
+  if (name === 'minecraft:redstone_wire') return new Set(['north', 'east', 'south', 'west', 'power'])
+  if (name === 'minecraft:chorus_plant') return new Set(['north', 'east', 'south', 'west', 'up', 'down'])
+  if (name.endsWith('_door')) return new Set(['open', 'powered', 'hinge'])
+  return new Set()
+}
+
+function stableStateMatches(worldBlock, expected) {
+  if (!worldBlock || blockName(worldBlock.name) !== expected.name) return false
+  const ignored = neighborDerivedProperties(expected.name)
+  const props = expected.properties || {}
+  let actual = {}
+  try {
+    actual = typeof worldBlock.getProperties === 'function'
+      ? worldBlock.getProperties()
+      : (worldBlock.properties || {})
+  } catch {}
+  return Object.entries(props).every(([property, value]) =>
+    ignored.has(property) || String(actual[property]) === String(value)
+  )
+}
+
 function placementOrientations(block) {
   const yaws = []
   const addYaw = value => {
@@ -171,7 +228,9 @@ function placementOrientations(block) {
   }
   const properties = block.properties || {}
   if (properties.rotation !== undefined && Number.isFinite(Number(properties.rotation))) {
-    addYaw(Number(properties.rotation) * Math.PI / 8)
+    // Standing signs and similar blocks expose 16 rotation states. Verify the
+    // resulting block state rather than trusting an assumed yaw mapping.
+    for (let step = 0; step < 16; step++) addYaw(step * Math.PI / 8)
   }
   const byFacing = { south: 0, west: Math.PI / 2, north: Math.PI, east: -Math.PI / 2 }
   if (byFacing[properties.facing] !== undefined) addYaw(byFacing[properties.facing])
@@ -263,10 +322,13 @@ async function main() {
   const containersCompleted = savedState.containersCompleted
   const blockEntitiesByPosition = new Map()
   for (const entity of loaded.blockEntities) {
-    const x = Number(entity.x ?? entity.pos?.x)
-    const y = Number(entity.y ?? entity.pos?.y)
-    const z = Number(entity.z ?? entity.pos?.z)
+    // Nucleation returns { id, position: [x, y, z], nbt }, not x/y/z at top level.
+    const position = entity.position ?? entity.pos
+    const x = Number(entity.x ?? position?.x ?? (Array.isArray(position) ? position[0] : undefined))
+    const y = Number(entity.y ?? position?.y ?? (Array.isArray(position) ? position[1] : undefined))
+    const z = Number(entity.z ?? position?.z ?? (Array.isArray(position) ? position[2] : undefined))
     if ([x, y, z].every(Number.isSafeInteger)) blockEntitiesByPosition.set(key({ x, y, z }), entity)
+    else console.warn('Ignoring schematic block entity with an unrecognized position:', entity.id || 'unknown')
   }
   const host = (process.env.MC_HOST || 'myawesomeserverwithf.falix.gg').trim()
   const port = Number.parseInt(process.env.MC_PORT || '25565', 10)
@@ -442,20 +504,21 @@ async function main() {
     if (!definition) return null
     const rawCount = scalar(rawItem?.Count ?? rawItem?.count ?? rawItem?.amount ?? entry?.Count ?? entry?.count)
     const count = Math.max(1, Math.min(Number(definition.stackSize) || 64, Number(rawCount) || 1))
-    const rawSlot = scalar(entry?.Slot ?? entry?.slot)
-    const slot = Number.isInteger(Number(rawSlot)) ? Number(rawSlot) : null
+    const rawSlot = scalar(entry?.Slot ?? entry?.slot ?? rawItem?.Slot ?? rawItem?.slot)
+    const slot = rawSlot === undefined || rawSlot === null ? null : Number.isInteger(Number(rawSlot)) ? Number(rawSlot) : null
     const rawMetadata = scalar(rawItem?.Damage ?? rawItem?.damage ?? rawItem?.metadata)
     const metadata = Number.isFinite(Number(rawMetadata)) ? Number(rawMetadata) : 0
     const rawTag = rawItem?.tag ?? rawItem?.Tag
     const nbt = rawTag && typeof rawTag === 'object' && typeof rawTag.type === 'string' && 'value' in rawTag ? rawTag : null
-    return { definition, count, slot, metadata, nbt }
+    const components = rawItem?.components ?? rawItem?.Components
+    return { definition, count, slot, metadata, nbt, components }
   }
 
   async function restoreContainerContents(id) {
     for (const [localKey, entity] of blockEntitiesByPosition) {
       if (stopping || id !== activeBuildId || !bot) return
       const items = entityItems(entity)
-      if (items.length === 0 || containersCompleted.has(localKey)) continue
+      if (items.length === 0) continue
       const localPos = localKey.split(',').map(Number)
       const target = new Vec3(ORIGIN[0] + localPos[0], ORIGIN[1] + localPos[1], ORIGIN[2] + localPos[2])
       const name = blockEntitiesByPosition.get(localKey)?.name || 'block entity'
@@ -483,18 +546,24 @@ async function main() {
             console.warn(`Container slot ${destination} is invalid for ${block.name} at ${key(target)}.`)
             continue
           }
+          const wanted = new Item(data.definition.id, data.count, data.metadata, data.nbt)
           const current = container.slots[destination]
-          if (current && current.name === data.definition.name && current.count === data.count) continue
+          if (current && Item.equal(current, wanted, true, true)) continue
           if (current) {
             allCopied = false
-            console.warn(`Container slot ${destination} at ${key(target)} is already occupied; leaving it unchanged.`)
+            console.warn(`Container slot ${destination} at ${key(target)} contains a different item or data; leaving it unchanged.`)
+            continue
+          }
+          if (data.components && Object.keys(data.components).length > 0) {
+            allCopied = false
+            console.warn(`Item components for ${data.definition.name} at ${key(target)} are not mapped to the current client item format; refusing to silently discard them.`)
             continue
           }
           const hotbarIndex = index % 9
           const playerSlot = 36 + hotbarIndex
           const activeWindowSlot = container.inventoryStart + 27 + hotbarIndex
           try {
-            await bot.creative.setInventorySlot(playerSlot, new Item(data.definition.id, data.count, data.metadata, data.nbt))
+            await bot.creative.setInventorySlot(playerSlot, wanted)
             await bot.clickWindow(activeWindowSlot, 0, 0)
             await bot.clickWindow(destination, 0, 0)
             await delay(BUILD_DELAY_MS)
@@ -547,6 +616,16 @@ async function main() {
   }
 
   async function placeTarget(block, target, id) {
+    if (isAutoPlacedCompanion(block)) {
+      const existing = bot?.blockAt(target)
+      if (existing && !isAir(existing.name) &&
+          blockName(existing.name) !== block.name &&
+          !await clearTargetIfOccupied(target, block)) {
+        return { status: 'target-obstructed', name: block.name }
+      }
+      return { status: 'companion-managed', name: block.name }
+    }
+
     let item = await ensureCreativeItem(block)
     if (!item) return { status: 'unavailable-item', name: block.name }
 
@@ -554,8 +633,12 @@ async function main() {
       return { status: 'target-obstructed', name: block.name }
     }
 
-    const faces = supportDirections(block.properties)
+    const faces = supportDirections(block)
     const orientations = placementOrientations(block)
+    const properties = block.properties || {}
+    const placementHalf = ['top', 'bottom'].includes(properties.half)
+      ? properties.half
+      : (block.name.endsWith('_slab') && ['top', 'bottom'].includes(properties.type) ? properties.type : undefined)
     let sawSupport = false
     let lastReason = 'placement-failed'
     for (const direction of faces) {
@@ -575,13 +658,27 @@ async function main() {
         try {
           await bot.equip(item, 'hand')
           await bot.look(orientation.yaw, orientation.pitch, true)
-          await bot.placeBlock(reference, direction)
+          if (typeof bot._placeBlockWithOptions === 'function') {
+            // Public placeBlock adjusts the view toward the clicked face and overrides
+            // the yaw we are testing. This path leaves our chosen view unchanged.
+            await bot._placeBlockWithOptions(reference, direction, {
+              forceLook: 'ignore',
+              swingArm: 'right',
+              ...(placementHalf ? { half: placementHalf } : {})
+            })
+          } else {
+            await bot.placeBlock(reference, direction)
+          }
           await delay(BUILD_DELAY_MS)
           const after = bot.blockAt(target)
           if (stateMatches(after, block)) return { status: 'placed' }
 
-          // Many blocks derive their facing/rotation from the player's look direction.
-          // In Creative, remove a wrongly-oriented attempt and test the next orientation.
+          // Preserve a correctly oriented block while neighbor-derived properties settle.
+          if (stableStateMatches(after, block)) {
+            lastReason = 'pending-neighbors'
+            return { status: 'pending-neighbors', name: block.name }
+          }
+
           if (after && !isAir(after.name) && after.boundingBox !== 'empty') {
             try { await bot.dig(after, true) } catch {}
             await delay(Math.max(100, BUILD_DELAY_MS))
@@ -619,6 +716,10 @@ async function main() {
           continue
         }
         completed.delete(targetKey)
+        if (stableStateMatches(existing, block)) {
+          failed.set(targetKey, { status: 'pending-neighbors', name: block.name })
+          continue
+        }
 
         let result
         for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_BLOCK; attempt++) {
@@ -626,7 +727,7 @@ async function main() {
           result = await placeTarget(block, target, id)
           if (result.status === 'placed') break
           if (result.status === 'cancelled') return
-          if (result.status === 'unavailable-item' || result.status === 'no-support' || result.status === 'target-obstructed') break
+          if (['unavailable-item', 'no-support', 'target-obstructed', 'companion-managed', 'pending-neighbors'].includes(result.status)) break
           await delay(BUILD_DELAY_MS * attempt)
         }
 
@@ -635,11 +736,11 @@ async function main() {
           failed.delete(targetKey)
           progressThisPass++
           saveState(completed, 'building', containersCompleted)
+          if (progressThisPass % 25 === 0) report()
         } else {
           failed.set(targetKey, result || { status: 'unknown', name: block.name })
         }
 
-        if (completed.size > 0 && completed.size % 25 === 0) report()
         if (buildCursor % 10 === 0) await delay(BUILD_DELAY_MS)
       }
 
