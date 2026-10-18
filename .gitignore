@@ -1,3 +1,5 @@
 node_modules/
 .env
 npm-debug.log*
+build-state.json
+build-state.json.tmp
