@@ -259,12 +259,14 @@ function entityData(entity) {
   return unwrapNbt(data) || {}
 }
 
-function entityItems(entity) {
+function entityInventory(entity) {
   const data = entityData(entity)
-  const candidate = unwrapNbt(data.Items ?? data.items ?? data.value?.Items ?? data.value?.items)
-  if (Array.isArray(candidate)) return candidate
-  if (candidate && Array.isArray(candidate.value)) return candidate.value
-  return []
+  const raw = data.Items ?? data.items ?? data.value?.Items ?? data.value?.items
+  if (raw === undefined || raw === null) return { hasItems: false, items: [] }
+  const candidate = unwrapNbt(raw)
+  if (Array.isArray(candidate)) return { hasItems: true, items: candidate }
+  if (candidate && Array.isArray(candidate.value)) return { hasItems: true, items: candidate.value }
+  return { hasItems: false, items: [] }
 }
 
 function scalar(value) {
@@ -514,73 +516,177 @@ async function main() {
     return { definition, count, slot, metadata, nbt, components }
   }
 
+  async function withScratchHotbar(container, hotbarIndex, targetSlot, operation) {
+    const playerSlot = 36 + hotbarIndex
+    const activeWindowSlot = container.inventoryStart + 27 + hotbarIndex
+    const originalItem = bot.inventory.slots[playerSlot] || null
+
+    // Preserve the bot's own hotbar item while temporarily moving Creative-created
+    // stacks through the player inventory to a container slot.
+    await bot.creative.clearSlot(playerSlot)
+    try {
+      return await operation({ playerSlot, activeWindowSlot })
+    } finally {
+      try {
+        if (container.selectedItem) await bot.clickWindow(targetSlot, 0, 0)
+      } catch {}
+      try {
+        await bot.creative.clearSlot(playerSlot)
+        if (originalItem) await bot.creative.setInventorySlot(playerSlot, originalItem)
+      } catch (error) {
+        console.warn(`Could not restore hotbar slot ${playerSlot}: ${error.message}`)
+      }
+    }
+  }
+
+  function containerItemMatches(current, data) {
+    if (!current || current.name !== data.definition.name || current.count !== data.count) return false
+    if (data.components && Object.keys(data.components).length > 0) {
+      // prismarine-item exposes component arrays on newer versions, while the schematic
+      // parser returns structured NBT JSON. Don't pretend these different forms match.
+      return Array.isArray(current.components) && JSON.stringify(current.components) === JSON.stringify(data.components)
+    }
+    const wanted = new Item(data.definition.id, data.count, data.metadata, data.nbt)
+    return Item.equal(current, wanted, true, true)
+  }
+
+  async function clearContainerSlot(container, targetSlot, locationKey) {
+    const hotbarIndex = targetSlot % 9
+    return withScratchHotbar(container, hotbarIndex, targetSlot, async ({ activeWindowSlot }) => {
+      try {
+        await bot.clickWindow(targetSlot, 0, 0)
+        await bot.clickWindow(activeWindowSlot, 0, 0)
+        await delay(BUILD_DELAY_MS)
+        const stillThere = container.slots[targetSlot]
+        if (stillThere) {
+          console.warn(`Could not clear existing item from container slot ${targetSlot} at ${locationKey}.`)
+          return false
+        }
+        return true
+      } catch (error) {
+        console.warn(`Could not clear container slot ${targetSlot} at ${locationKey}: ${error.message}`)
+        return false
+      }
+    })
+  }
+
+  async function putContainerItem(container, targetSlot, data, locationKey, index) {
+    const hotbarIndex = index % 9
+    const wanted = new Item(data.definition.id, data.count, data.metadata, data.nbt)
+    return withScratchHotbar(container, hotbarIndex, targetSlot, async ({ playerSlot, activeWindowSlot }) => {
+      try {
+        await bot.creative.setInventorySlot(playerSlot, wanted)
+        await bot.clickWindow(activeWindowSlot, 0, 0)
+        await bot.clickWindow(targetSlot, 0, 0)
+        await delay(BUILD_DELAY_MS)
+        const placed = container.slots[targetSlot]
+        if (!containerItemMatches(placed, data)) {
+          console.warn(`Could not verify ${data.definition.name} x${data.count} in slot ${targetSlot} at ${locationKey}.`)
+          return false
+        }
+        return true
+      } catch (error) {
+        console.warn(`Could not place ${data.definition.name} x${data.count} in container slot ${targetSlot} at ${locationKey}: ${error.message}`)
+        return false
+      }
+    })
+  }
+
   async function restoreContainerContents(id) {
     for (const [localKey, entity] of blockEntitiesByPosition) {
       if (stopping || id !== activeBuildId || !bot) return
-      const items = entityItems(entity)
-      if (items.length === 0) continue
+      const inventory = entityInventory(entity)
+      if (!inventory.hasItems) continue
+
+      const items = inventory.items
       const localPos = localKey.split(',').map(Number)
       const target = new Vec3(ORIGIN[0] + localPos[0], ORIGIN[1] + localPos[1], ORIGIN[2] + localPos[2])
-      const name = blockEntitiesByPosition.get(localKey)?.name || 'block entity'
+      const name = entity.id || 'block entity'
       try {
         const moved = await moveNear(target, id)
         if (!moved || !bot || id !== activeBuildId) return
         const block = bot.blockAt(target)
         if (!block || isAir(block.name)) {
-          console.warn(`Skipping saved container contents at ${key(target)}: target block is missing.`)
+          console.warn(`Skipping saved inventory at ${key(target)}: target block is missing.`)
           continue
         }
+
         const container = await bot.openContainer(block)
         let allCopied = true
-        const entries = items.map(containerItemInfo)
+        const expectedBySlot = new Map()
         for (let index = 0; index < items.length; index++) {
-          const data = entries[index]
+          const data = containerItemInfo(items[index])
           if (!data) {
             allCopied = false
-            console.warn(`Unsupported container item at ${key(target)}; its item data was not recognized.`)
+            console.warn(`Unsupported saved item at ${key(target)} entry ${index}; its inventory slot cannot be reconstructed.`)
             continue
           }
-          const destination = data.slot === null ? index : data.slot
-          if (!Number.isInteger(destination) || destination < 0 || destination >= container.inventoryStart) {
+          const slot = data.slot === null ? index : data.slot
+          if (!Number.isInteger(slot) || slot < 0 || slot >= container.inventoryStart) {
             allCopied = false
-            console.warn(`Container slot ${destination} is invalid for ${block.name} at ${key(target)}.`)
+            console.warn(`Container slot ${slot} is invalid for ${block.name} at ${key(target)}.`)
             continue
           }
-          const wanted = new Item(data.definition.id, data.count, data.metadata, data.nbt)
-          const current = container.slots[destination]
-          if (current && Item.equal(current, wanted, true, true)) continue
-          if (current) {
+          if (expectedBySlot.has(slot)) {
             allCopied = false
-            console.warn(`Container slot ${destination} at ${key(target)} contains a different item or data; leaving it unchanged.`)
+            console.warn(`Duplicate saved inventory slot ${slot} for ${block.name} at ${key(target)}.`)
+            continue
+          }
+          expectedBySlot.set(slot, data)
+        }
+
+        // Make the live container match the saved slot map. Empty slots in the
+        // schematic are cleared as well, rather than leaving stale world contents.
+        for (let slot = 0; slot < container.inventoryStart; slot++) {
+          if (stopping || id !== activeBuildId || !bot) {
+            allCopied = false
+            break
+          }
+          const current = container.slots[slot]
+          if (!current) continue
+          const expected = expectedBySlot.get(slot)
+          if (expected && containerItemMatches(current, expected)) continue
+          if (expected?.components && Object.keys(expected.components).length > 0 &&
+              current.name === expected.definition.name && current.count === expected.count) {
+            allCopied = false
+            console.warn(`Custom data/components in slot ${slot} at ${key(target)} cannot be verified safely; preserving the existing stack.`)
+            continue
+          }
+          if (expected?.components && Object.keys(expected.components).length > 0) {
+            allCopied = false
+            console.warn(`Custom components for ${expected.definition.name} at ${key(target)} cannot be recreated safely; preserving slot ${slot}.`)
+            continue
+          }
+          if (!await clearContainerSlot(container, slot, key(target))) {
+            allCopied = false
+          }
+        }
+
+        for (const [slot, data] of expectedBySlot) {
+          if (stopping || id !== activeBuildId || !bot) {
+            allCopied = false
+            break
+          }
+          if (containerItemMatches(container.slots[slot], data)) continue
+          if (container.slots[slot]) {
+            allCopied = false
+            console.warn(`Container slot ${slot} at ${key(target)} is still occupied; refusing to overwrite it.`)
             continue
           }
           if (data.components && Object.keys(data.components).length > 0) {
             allCopied = false
-            console.warn(`Item components for ${data.definition.name} at ${key(target)} are not mapped to the current client item format; refusing to silently discard them.`)
+            console.warn(`Custom components for ${data.definition.name} at ${key(target)} cannot be recreated safely.`)
             continue
           }
-          const hotbarIndex = index % 9
-          const playerSlot = 36 + hotbarIndex
-          const activeWindowSlot = container.inventoryStart + 27 + hotbarIndex
-          try {
-            await bot.creative.setInventorySlot(playerSlot, wanted)
-            await bot.clickWindow(activeWindowSlot, 0, 0)
-            await bot.clickWindow(destination, 0, 0)
-            await delay(BUILD_DELAY_MS)
-            const placed = container.slots[destination]
-            if (!placed || placed.name !== data.definition.name || placed.count !== data.count) {
-              allCopied = false
-              console.warn(`Could not verify ${data.definition.name} x${data.count} in slot ${destination} at ${key(target)}.`)
-            }
-          } catch (error) {
-            allCopied = false
-            console.warn(`Could not restore container item at ${key(target)} slot ${destination}: ${error.message}`)
-          }
+          if (!await putContainerItem(container, slot, data, key(target), slot)) allCopied = false
         }
+
         try { container.close() } catch {}
         if (allCopied) {
           containersCompleted.add(localKey)
           saveState(completed, 'building', containersCompleted)
+        } else {
+          containersCompleted.delete(localKey)
         }
       } catch (error) {
         console.warn(`Could not restore contents for ${name} at ${key(target)}: ${error.message}`)
