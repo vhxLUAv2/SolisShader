@@ -1,17 +1,22 @@
 {
   "name": "solis-afk-bot",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
-  "description": "A low-memory Minecraft Java 26.3 AFK jumping bot for offline-mode servers",
+  "description": "A Minecraft Java 26.3 AFK bot with autonomous schematic building",
   "main": "index.js",
   "scripts": {
     "start": "node --max-old-space-size=128 --env-file-if-exists=.env index.js",
-    "check": "node --check index.js"
+    "build": "node --max-old-space-size=512 --env-file-if-exists=.env build-schematic.js",
+    "check": "node --check index.js && node --check build-schematic.js"
   },
   "engines": {
     "node": ">=22.9.0"
   },
   "dependencies": {
-    "@wp2508/minecraft-protocol": "1.69.1"
+    "@wp2508/mineflayer": "4.42.2",
+    "@wp2508/minecraft-protocol": "1.69.1",
+    "mineflayer-pathfinder": "2.4.5",
+    "nucleation": "0.10.24",
+    "vec3": "0.2.0"
   }
 }
