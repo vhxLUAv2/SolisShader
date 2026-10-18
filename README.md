@@ -11,9 +11,9 @@ The server must accept offline-mode players. The bot does not change server sett
 ## Bot-Hosting.net setup
 
 1. Stop the server process.
-2. Delete the existing `node_modules` directory once to remove the failed/old Mineflayer installation and free its disk space. Keep `package.json` and `index.js`.
-3. Set the startup file to `index.js`.
-4. Start the server. The panel can run `npm install --no-fund --no-audit` and then `node index.js`; both the server and username already have defaults in the code.
+2. Set the startup file to `index.js` for the original low-memory AFK mode.
+3. Run `npm install --no-audit --no-fund` so dependencies for both AFK and schematic-builder modes are installed.
+4. Start the server with `node index.js`. The server and username already have defaults in the code. Use `npm run build -- <file> <x> <y> <z>` in a shell-capable environment to run schematic builds; the panel must support command-line arguments for that mode.
 
 The server address and bot name are already set, so a `.env` file is not required on the hosting panel. To override the defaults, set the variables below in the panel's environment settings.
 
