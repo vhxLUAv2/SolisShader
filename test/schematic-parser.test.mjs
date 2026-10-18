@@ -2,7 +2,9 @@ import assert from 'node:assert/strict'
 import { Schematic } from 'nucleation'
 
 const source = Schematic.create('solis-schematic-parser-smoke')
-source.setBlockWithProperties(0, 0, 0, 'minecraft:oak_stairs', {
+source.setBlockWithProperties(
+  0, 0, 0,
+  'minecraft:oak_stairs',
   JSON.stringify({ facing: 'east', half: 'bottom', shape: 'straight' })
 )
 source.setBlockWithNbt(
