@@ -49,7 +49,11 @@ Run `npm run check` to check JavaScript syntax.
 | `DISCORD_BOT_TOKEN` | empty | Optional Discord bot token for restricted remote commands; keep secret |
 | `DISCORD_COMMAND_CHANNEL_ID` | empty | Discord text channel where remote commands are accepted |
 | `DISCORD_ALLOWED_USER_IDS` | empty | Comma-separated Discord user IDs allowed to issue commands |
-| `BUILD_MAX_BLOCKS` | `50000` | Maximum non-air blocks accepted in one schematic build |\n| `BUILD_BLOCK_ATTEMPTS` | `3` | Maximum placement attempts per block before it is reported unresolved |\n| `BUILD_DELAY_MS` | `250` | Delay between placement operations in milliseconds (minimum 50) |\n| `BUILD_STATE_FILE` | `./build-state.json` | Local file used to save build progress |
+| `BUILD_MAX_BLOCKS` | `50000` | Maximum non-air blocks accepted in one schematic build |
+| `BUILD_BLOCK_ATTEMPTS` | `3` | Maximum placement attempts per block before it is reported unresolved |
+| `BUILD_MAX_PASSES` | `4` | Maximum complete placement/recheck passes for neighbor-dependent blocks |
+| `BUILD_DELAY_MS` | `250` | Delay between placement operations in milliseconds (minimum 50) |
+| `BUILD_STATE_FILE` | `./build-state.json` | Local file used to save build progress |
 
 The bot requests a view distance of 2 and minimal particles. Its lightweight movement loop sends protocol movement/input packets, a tick-end packet, and a position heartbeat every 20 ticks. It does not retain incoming chunks or track other entities. Reconnect attempts use exponential backoff, starting at `RECONNECT_DELAY_SECONDS` and capping at `RECONNECT_MAX_DELAY_SECONDS`; the retry counter resets after a connection stays joined for 60 seconds. A connection watchdog checks incoming protocol traffic and closes a silent connection after `CONNECTION_WATCHDOG_SECONDS`, allowing the normal reconnect path to recover. The watchdog is a network-silence check, not a guarantee that the Minecraft server itself is healthy.
 
