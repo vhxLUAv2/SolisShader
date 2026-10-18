@@ -21,11 +21,6 @@ function fail(message) {
   process.exitCode = 1
 }
 
-function readInteger(value, name) {
-  if (!Number.isSafeInteger(value)) throw new Error(`${name} must be a whole number.`)
-  return value
-}
-
 function blockName(name) {
   const plain = String(name || '').split('[')[0].split('{')[0]
   return plain && !plain.includes(':') ? 'minecraft:' + plain : plain
@@ -90,6 +85,19 @@ function saveState(completed, status) {
 
 function key(pos) {
   return `${pos.x},${pos.y},${pos.z}`
+}
+
+function withTimeout(promise, milliseconds) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('path timeout')), milliseconds)
+    Promise.resolve(promise).then(value => {
+      clearTimeout(timer)
+      resolve(value)
+    }, error => {
+      clearTimeout(timer)
+      reject(error)
+    })
+  })
 }
 
 async function main() {
@@ -226,10 +234,7 @@ async function main() {
     for (const stand of candidates) {
       if (id !== activeBuildId || !bot) return false
       try {
-        await Promise.race([
-          bot.pathfinder.goto(new goals.GoalNear(stand.x, stand.y, stand.z, 1)),
-          delay(30000).then(() => { throw new Error('path timeout') })
-        ])
+        await withTimeout(bot.pathfinder.goto(new goals.GoalNear(stand.x, stand.y, stand.z, 1)), 30000)
         if (id !== activeBuildId || !bot) return false
         return true
       } catch (error) {
