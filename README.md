@@ -27,7 +27,7 @@ npm install
 npm start
 ```
 
-Run `npm run check` to check JavaScript syntax.
+Run `npm run check` to check JavaScript syntax and run Nucleation round-trip smoke tests for `.schem`, `.litematic`, block states, and chest-item NBT.
 
 ## Environment variables
 
