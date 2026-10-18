@@ -155,6 +155,18 @@ async function main() {
 
   function report() {
     console.log(`Build progress: ${completed.size}/${orderedBlocks.length} saved; ${failed.size} blocked/unavailable.`)
+    if (failed.size === 0) return
+    const reasons = new Map()
+    const materials = new Map()
+    for (const result of failed.values()) {
+      const status = result?.status || 'unknown'
+      reasons.set(status, (reasons.get(status) || 0) + 1)
+      if (result?.name) materials.set(result.name, (materials.get(result.name) || 0) + 1)
+    }
+    console.log('Unresolved reasons: ' + [...reasons].map(([name, count]) => name + '=' + count).join(', '))
+    if (materials.size) {
+      console.log('Unresolved block types: ' + [...materials].sort((a, b) => b[1] - a[1]).slice(0, 20).map(([name, count]) => name + ' x' + count).join(', '))
+    }
   }
 
   function stopBuild() {
@@ -328,7 +340,8 @@ async function main() {
     saveState(completed, failed.size ? 'finished-with-unresolved-blocks' : 'finished')
     report()
     if (failed.size) {
-      console.warn('Some blocks could not be placed. Missing materials, unsupported blocks, and obstructions are not auto-destroyed; fix them and restart to retry.')
+      report()
+      console.warn('Some blocks could not be placed. Check the unresolved block types and reasons above. Missing materials, unsupported blocks, and obstructions are not auto-destroyed; fix them and restart to retry.')
     } else {
       console.log('Schematic build completed.')
     }
