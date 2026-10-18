@@ -21,6 +21,8 @@ const config = {
   jumpMinMs: readInteger('JUMP_MIN_SECONDS', 20, 1, 3600) * 1000,
   jumpMaxMs: readInteger('JUMP_MAX_SECONDS', 28, 1, 3600) * 1000,
   reconnectDelayMs: readInteger('RECONNECT_DELAY_SECONDS', 10, 1, 3600) * 1000,
+  reconnectMaxDelayMs: readInteger('RECONNECT_MAX_DELAY_SECONDS', 120, 10, 3600) * 1000,
+  watchdogTimeoutMs: readInteger('CONNECTION_WATCHDOG_SECONDS', 120, 30, 900) * 1000,
   discordWebhookUrl: (process.env.DISCORD_WEBHOOK_URL || '').trim(),
   verificationWebhookUrl: (process.env.DISCORD_VERIFICATION_WEBHOOK_URL || '').trim()
 }
@@ -90,7 +92,7 @@ function sendDiscordVerificationAlert(url, message) {
     return
   }
 
-  const summary = message.replace(/\\s+/g, ' ').trim().slice(0, 900)
+  const summary = message.replace(/\s+/g, ' ').trim().slice(0, 900)
   const safeHost = config.host.replace(/`/g, '')
   const body = JSON.stringify({
     embeds: [{
@@ -224,6 +226,10 @@ function sendDiscordServerStatus(title, details, color) {
 let activeClient = null
 let reconnectTimer = null
 let movementTimer = null
+let watchdogTimer = null
+let stableConnectionTimer = null
+let reconnectAttempts = 0
+let lastServerPacketAt = 0
 let shuttingDown = false
 let movement = null
 
@@ -269,6 +275,33 @@ function formatReason(reason) {
   }
 }
 
+function stopWatchdog() {
+  if (watchdogTimer) clearInterval(watchdogTimer)
+  watchdogTimer = null
+  if (stableConnectionTimer) clearTimeout(stableConnectionTimer)
+  stableConnectionTimer = null
+}
+
+function startWatchdog(client) {
+  stopWatchdog()
+  lastServerPacketAt = Date.now()
+  watchdogTimer = setInterval(() => {
+    if (shuttingDown || activeClient !== client || client.ended || client.state !== 'play') return
+    const silentFor = Date.now() - lastServerPacketAt
+    if (silentFor < config.watchdogTimeoutMs) return
+    console.warn(`Connection watchdog: no server packets for ${Math.round(silentFor / 1000)} seconds; reconnecting.`)
+    stopMovement()
+    stopWatchdog()
+    try {
+      if (client.socket && !client.socket.destroyed) client.socket.destroy(new Error('Connection watchdog timeout'))
+      else client.end('Connection watchdog timeout')
+    } catch (error) {
+      console.warn('Could not close stale connection cleanly: ' + error.message)
+      client.end('Connection watchdog timeout')
+    }
+  }, 15000)
+}
+
 function stopMovement() {
   if (movementTimer) clearInterval(movementTimer)
   movementTimer = null
@@ -277,10 +310,14 @@ function stopMovement() {
 
 function scheduleReconnect() {
   if (shuttingDown || reconnectTimer) return
+  const exponent = Math.min(reconnectAttempts, 10)
+  const delay = Math.min(config.reconnectDelayMs * (2 ** exponent), config.reconnectMaxDelayMs)
+  reconnectAttempts++
+  console.log(`Reconnect attempt ${reconnectAttempts} scheduled in ${Math.ceil(delay / 1000)} seconds.`)
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null
     connect()
-  }, config.reconnectDelayMs)
+  }, delay)
 }
 
 function sendMovement(client, name) {
@@ -449,7 +486,14 @@ function connect() {
 
   activeClient = client
   let thisClientReachedOnline = false
+  client.on('packet', () => {
+    if (activeClient === client) lastServerPacketAt = Date.now()
+  })
   client.on('playerJoin', () => {
+    startWatchdog(client)
+    stableConnectionTimer = setTimeout(() => {
+      if (activeClient === client && !client.ended) reconnectAttempts = 0
+    }, 60000)
     if (!thisClientReachedOnline) {
       thisClientReachedOnline = true
       const wasOnlineBefore = hasBeenOnline
@@ -480,6 +524,7 @@ function connect() {
   })
   client.on('end', reason => {
     stopMovement()
+    stopWatchdog()
     if (activeClient === client) activeClient = null
     console.warn(`Disconnected: ${formatReason(reason)}`)
     if (!shuttingDown && thisClientReachedOnline) {
