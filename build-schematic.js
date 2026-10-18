@@ -306,6 +306,44 @@ function scalar(value) {
   return result
 }
 
+function toPrismarineNbt(value) {
+  if (value === null || value === undefined) return null
+  if (typeof value !== 'object') return value
+  if (typeof value.type === 'string' && Object.prototype.hasOwnProperty.call(value, 'value')) return value
+
+  const variants = {
+    Byte: 'byte', Short: 'short', Int: 'int', Long: 'long',
+    Float: 'float', Double: 'double', ByteArray: 'byteArray',
+    String: 'string', List: 'list', Compound: 'compound',
+    IntArray: 'intArray', LongArray: 'longArray'
+  }
+  const keys = Object.keys(value)
+  if (keys.length === 1 && variants[keys[0]]) {
+    const kind = keys[0]
+    const raw = value[kind]
+    if (kind === 'Compound') {
+      const compound = raw && typeof raw === 'object' ? raw : {}
+      return {
+        type: 'compound',
+        value: Object.fromEntries(Object.entries(compound).map(([key, nested]) => [key, toPrismarineNbt(nested)]))
+      }
+    }
+    if (kind === 'List') {
+      const entries = Array.isArray(raw) ? raw : []
+      const converted = entries.map(toPrismarineNbt)
+      const childType = converted[0]?.type || 'end'
+      return { type: 'list', value: { type: childType, value: converted.map(tag => tag?.value ?? tag) } }
+    }
+    return { type: variants[kind], value: raw }
+  }
+
+  // Accept a plain JSON compound as well as tagged JSON from Nucleation.
+  return {
+    type: 'compound',
+    value: Object.fromEntries(Object.entries(value).map(([key, nested]) => [key, toPrismarineNbt(nested)]))
+  }
+}
+
 function withTimeout(promise, milliseconds) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('path timeout')), milliseconds)
@@ -538,7 +576,8 @@ async function main() {
     const rawMetadata = scalar(rawItem?.Damage ?? rawItem?.damage ?? rawItem?.metadata)
     const metadata = Number.isFinite(Number(rawMetadata)) ? Number(rawMetadata) : 0
     const rawTag = rawItem?.tag ?? rawItem?.Tag
-    const nbt = rawTag && typeof rawTag === 'object' && typeof rawTag.type === 'string' && 'value' in rawTag ? rawTag : null
+    const convertedTag = rawTag == null ? null : toPrismarineNbt(rawTag)
+    const nbt = convertedTag?.type === 'compound' ? convertedTag : null
     const components = rawItem?.components ?? rawItem?.Components
     return { definition, count, slot, metadata, nbt, components }
   }
