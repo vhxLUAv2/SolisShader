@@ -14,9 +14,18 @@ const MAX_ATTEMPTS_PER_BLOCK = Number.parseInt(process.env.BUILD_BLOCK_ATTEMPTS 
 const BUILD_DELAY_MS = Number.parseInt(process.env.BUILD_DELAY_MS || '250', 10)
 const BUILD_MAX_PASSES = Number.parseInt(process.env.BUILD_MAX_PASSES || '4', 10)
 const STATE_FILE = path.resolve(process.env.BUILD_STATE_FILE || './build-state.json')
+const BUILD_ARGS = process.argv.slice(2)
+const HAS_EXPLICIT_SCHEMATIC = /\.(?:schem|litematic)$/i.test(BUILD_ARGS[0] || '')
 let activeSchematicHash = null
-const SCHEMATIC_FILE = process.argv[2]
-const ORIGIN = process.argv.slice(3, 6).map(Number)
+let SCHEMATIC_FILE = HAS_EXPLICIT_SCHEMATIC ? path.resolve(BUILD_ARGS[0]) : null
+const ORIGIN_ARGS = HAS_EXPLICIT_SCHEMATIC ? BUILD_ARGS.slice(1) : BUILD_ARGS
+const ORIGIN = ORIGIN_ARGS.length === 0
+  ? [
+      Number.parseInt(process.env.BUILD_ORIGIN_X || '100', 10),
+      Number.parseInt(process.env.BUILD_ORIGIN_Y || '64', 10),
+      Number.parseInt(process.env.BUILD_ORIGIN_Z || '100', 10)
+    ]
+  : ORIGIN_ARGS.map(Number)
 
 function fail(message) {
   console.error(message)
@@ -358,8 +367,36 @@ function withTimeout(promise, milliseconds) {
 }
 
 async function main() {
-  if (!SCHEMATIC_FILE || ORIGIN.length !== 3 || !ORIGIN.every(Number.isSafeInteger)) {
-    fail('Usage: npm run build -- <file.schem|file.litematic> <originX> <originY> <originZ>')
+  if (!SCHEMATIC_FILE) {
+    const schematicDirectory = path.resolve(process.env.SCHEMATICS_DIR || './schematics')
+    let candidates = []
+    try {
+      candidates = fs.readdirSync(schematicDirectory, { withFileTypes: true })
+        .filter(entry => entry.isFile() && /\.(?:schem|litematic)$/i.test(entry.name))
+        .map(entry => path.join(schematicDirectory, entry.name))
+        .sort((a, b) => a.localeCompare(b))
+    } catch (error) {
+      fail(`Could not read schematic directory ${schematicDirectory}: ${error.message}`)
+      return
+    }
+
+    if (candidates.length === 0) {
+      fail(`No .schem or .litematic files found in ${schematicDirectory}. Upload a schematic there first.`)
+      return
+    }
+    if (candidates.length > 1) {
+      fail('More than one schematic was found. Leave only the one to build in ' +
+        schematicDirectory + ' or pass its filename explicitly: ' +
+        candidates.map(file => path.basename(file)).join(', '))
+      return
+    }
+
+    SCHEMATIC_FILE = candidates[0]
+    console.log('Auto-detected schematic: ' + path.basename(SCHEMATIC_FILE))
+  }
+
+  if (ORIGIN.length !== 3 || !ORIGIN.every(Number.isSafeInteger)) {
+    fail('Origin must be three whole-number coordinates. Use npm run build -- <x> <y> <z>, or set BUILD_ORIGIN_X, BUILD_ORIGIN_Y, and BUILD_ORIGIN_Z.')
     return
   }
   if (!fs.existsSync(SCHEMATIC_FILE)) {
