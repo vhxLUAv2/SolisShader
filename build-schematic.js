@@ -32,6 +32,18 @@ function isAir(name) {
   return ['minecraft:air', 'minecraft:cave_air', 'minecraft:void_air'].includes(blockName(name))
 }
 
+function normalizeBlockProperties(properties) {
+  if (Array.isArray(properties)) {
+    return Object.fromEntries(properties
+      .filter(entry => Array.isArray(entry) && entry.length >= 2)
+      .map(([key, value]) => [String(key), String(value)]))
+  }
+  if (properties && typeof properties === 'object') {
+    return Object.fromEntries(Object.entries(properties).map(([key, value]) => [String(key), String(value)]))
+  }
+  return {}
+}
+
 async function loadSchematic(file) {
   const { Schematic } = await import('nucleation')
   const bytes = fs.readFileSync(file)
@@ -62,9 +74,7 @@ async function loadSchematic(file) {
     if (![x, y, z].every(Number.isSafeInteger) || !name) {
       throw new Error(`Invalid block entry at index ${index}.`)
     }
-    const properties = block.properties && typeof block.properties === 'object'
-      ? Object.fromEntries(Object.entries(block.properties).map(([key, value]) => [key, String(value)]))
-      : {}
+    const properties = normalizeBlockProperties(block.properties)
     return { x, y, z, name, properties }
   })
   if (blocks.length === 0) throw new Error('The schematic contains no non-air blocks.')
