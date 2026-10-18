@@ -2,6 +2,7 @@
 
 const fs = require('node:fs')
 const path = require('node:path')
+const crypto = require('node:crypto')
 const { setTimeout: delay } = require('node:timers/promises')
 const mineflayer = require('@wp2508/mineflayer')
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
@@ -11,6 +12,7 @@ const MAX_BLOCKS = Number.parseInt(process.env.BUILD_MAX_BLOCKS || '50000', 10)
 const MAX_ATTEMPTS_PER_BLOCK = Number.parseInt(process.env.BUILD_BLOCK_ATTEMPTS || '3', 10)
 const BUILD_DELAY_MS = Number.parseInt(process.env.BUILD_DELAY_MS || '250', 10)
 const STATE_FILE = path.resolve(process.env.BUILD_STATE_FILE || './build-state.json')
+let activeSchematicHash = null
 const SCHEMATIC_FILE = process.argv[2]
 const ORIGIN = process.argv.slice(3, 6).map(Number)
 
@@ -58,13 +60,14 @@ async function loadSchematic(file) {
     }
     return { x, y, z, name }
   })
-  return { schematic, blocks: normalized, bytes: bytes.length }
+  return { schematic, blocks: normalized, bytes: bytes.length, hash: crypto.createHash('sha256').update(bytes).digest('hex') }
 }
 
 function readState() {
   try {
     const state = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'))
     if (state.schematic === path.resolve(SCHEMATIC_FILE) &&
+        state.hash === activeSchematicHash &&
         state.origin?.join(',') === ORIGIN.join(',')) {
       return new Set(Array.isArray(state.completed) ? state.completed : [])
     }
@@ -77,6 +80,7 @@ function saveState(completed, status) {
   fs.writeFileSync(temp, JSON.stringify({
     schematic: path.resolve(SCHEMATIC_FILE),
     origin: ORIGIN,
+    hash: activeSchematicHash,
     completed: [...completed],
     status,
     updatedAt: new Date().toISOString()
@@ -113,6 +117,7 @@ async function main() {
   }
 
   const { blocks } = loaded
+  activeSchematicHash = loaded.hash
   const completed = readState()
   const host = (process.env.MC_HOST || 'myawesomeserverwithf.falix.gg').trim()
   const port = Number.parseInt(process.env.MC_PORT || '25565', 10)
@@ -133,9 +138,7 @@ async function main() {
   let building = false
   let buildCursor = 0
   let activeBuildId = 0
-  let completedCount = 0
   let failed = new Map()
-  let pathfinderPlugin
   let reconnectTimer = null
 
   const orderedBlocks = blocks.slice().sort((a, b) =>
@@ -223,13 +226,8 @@ async function main() {
     for (const stand of candidates) {
       if (id !== activeBuildId || !bot) return false
       try {
-        bot.pathfinder.setGoal(new goals.GoalNear(stand.x, stand.y, stand.z, 1))
         await Promise.race([
-          new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error('path timeout')), 30000)
-            bot.once('goal_reached', () => { clearTimeout(timeout); resolve() })
-            bot.once('path_reset', () => { clearTimeout(timeout); reject(new Error('path reset')) })
-          }),
+          bot.pathfinder.goto(new goals.GoalNear(stand.x, stand.y, stand.z, 1)),
           delay(30000).then(() => { throw new Error('path timeout') })
         ])
         if (id !== activeBuildId || !bot) return false
@@ -295,7 +293,6 @@ async function main() {
       const existing = bot.blockAt(target)
       if (existing && blockName(existing.name) === block.name) {
         completed.add(targetKey)
-        completedCount++
         saveState(completed, 'building')
         continue
       }
@@ -313,7 +310,6 @@ async function main() {
       if (result?.status === 'placed') {
         completed.add(targetKey)
         failed.delete(targetKey)
-        completedCount++
         placedThisRun++
         saveState(completed, 'building')
       } else {
