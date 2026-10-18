@@ -256,10 +256,24 @@ function placementOrientations(block) {
 
 function unwrapNbt(value) {
   let current = value
-  for (let i = 0; i < 8 && current && typeof current === 'object' &&
-      Object.prototype.hasOwnProperty.call(current, 'value') &&
-      (typeof current.type === 'string' || Object.keys(current).length <= 2); i++) {
-    current = current.value
+  const tagNames = new Set([
+    'Byte', 'Short', 'Int', 'Long', 'Float', 'Double',
+    'ByteArray', 'String', 'List', 'Compound', 'IntArray', 'LongArray'
+  ])
+  for (let i = 0; i < 12 && current && typeof current === 'object' && !Array.isArray(current); i++) {
+    // Nucleation serializes NBT as tagged JSON, e.g. { String: "minecraft:diamond" }
+    // or { List: [{ Compound: { id: { String: ... }, Count: { Byte: 3 } } }] }.
+    if (Object.prototype.hasOwnProperty.call(current, 'value') &&
+        (typeof current.type === 'string' || Object.keys(current).length <= 2)) {
+      current = current.value
+      continue
+    }
+    const keys = Object.keys(current)
+    if (keys.length === 1 && tagNames.has(keys[0])) {
+      current = current[keys[0]]
+      continue
+    }
+    break
   }
   return current
 }
