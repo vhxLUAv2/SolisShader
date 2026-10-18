@@ -39,11 +39,13 @@ Run `npm run check` to check JavaScript syntax.
 | `MC_VERSION` | `26.3` | Minecraft protocol version |
 | `JUMP_MIN_SECONDS` | `20` | Minimum interval between jumps |
 | `JUMP_MAX_SECONDS` | `28` | Maximum interval between jumps |
-| `RECONNECT_DELAY_SECONDS` | `10` | Reconnect delay |
+| `RECONNECT_DELAY_SECONDS` | `10` | Initial reconnect delay; increases after repeated failures |
+| `RECONNECT_MAX_DELAY_SECONDS` | `120` | Maximum reconnect delay after repeated failures |
+| `CONNECTION_WATCHDOG_SECONDS` | `120` | Reconnect if no server packets arrive for this long (30–900 seconds) |
 | `DISCORD_WEBHOOK_URL` | empty | Optional Discord webhook for server online/offline alerts |
 | `DISCORD_VERIFICATION_WEBHOOK_URL` | empty | Optional dedicated Discord webhook for Falix verification links |
 
-The bot requests a view distance of 2 and minimal particles. Its lightweight movement loop sends protocol movement/input packets, a tick-end packet, and a position heartbeat every 20 ticks. It does not retain incoming chunks or track other entities.
+The bot requests a view distance of 2 and minimal particles. Its lightweight movement loop sends protocol movement/input packets, a tick-end packet, and a position heartbeat every 20 ticks. It does not retain incoming chunks or track other entities. Reconnect attempts use exponential backoff, starting at `RECONNECT_DELAY_SECONDS` and capping at `RECONNECT_MAX_DELAY_SECONDS`; the retry counter resets after a connection stays joined for 60 seconds. A connection watchdog checks incoming protocol traffic and closes a silent connection after `CONNECTION_WATCHDOG_SECONDS`, allowing the normal reconnect path to recover. The watchdog is a network-silence check, not a guarantee that the Minecraft server itself is healthy.
 
 ## Discord verification alerts
 
