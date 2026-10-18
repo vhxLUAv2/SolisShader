@@ -3,6 +3,14 @@
 const minecraftProtocol = require('@wp2508/minecraft-protocol')
 const https = require('https')
 
+function readBoolean(name, fallback) {
+  const raw = process.env[name]
+  if (raw == null || raw.trim() === '') return fallback
+  if (/^(true|1|yes|on)$/i.test(raw.trim())) return true
+  if (/^(false|0|no|off)$/i.test(raw.trim())) return false
+  throw new Error(`${name} must be true or false.`)
+}
+
 function readInteger(name, fallback, minimum, maximum) {
   const raw = process.env[name]
   if (raw == null || raw.trim() === '') return fallback
@@ -18,6 +26,11 @@ const config = {
   port: readInteger('MC_PORT', 25565, 1, 65535),
   username: (process.env.MC_USERNAME || 'bot').trim(),
   version: (process.env.MC_VERSION || '26.3').trim(),
+  jumpEnabled: readBoolean('AFK_JUMP_ENABLED', true),
+  statsIntervalMs: readInteger('STATS_LOG_INTERVAL_SECONDS', 0, 0, 86400) * 1000,
+  discordBotToken: (process.env.DISCORD_BOT_TOKEN || '').trim(),
+  discordCommandChannelId: (process.env.DISCORD_COMMAND_CHANNEL_ID || '').trim(),
+  discordAllowedUserIds: (process.env.DISCORD_ALLOWED_USER_IDS || '').split(',').map(value => value.trim()).filter(Boolean),
   jumpMinMs: readInteger('JUMP_MIN_SECONDS', 20, 1, 3600) * 1000,
   jumpMaxMs: readInteger('JUMP_MAX_SECONDS', 28, 1, 3600) * 1000,
   reconnectDelayMs: readInteger('RECONNECT_DELAY_SECONDS', 10, 1, 3600) * 1000,
@@ -32,6 +45,12 @@ if (!/^[A-Za-z0-9_]{3,16}$/.test(config.username)) {
   throw new Error('MC_USERNAME must contain 3–16 letters, numbers, or underscores.')
 }
 if (!config.version) throw new Error('MC_VERSION must not be empty.')
+if (config.discordBotToken && (!config.discordCommandChannelId || !/^\d{17,20}$/.test(config.discordCommandChannelId) || config.discordAllowedUserIds.length === 0 || config.discordAllowedUserIds.some(id => !/^\d{17,20}$/.test(id)))) {
+  throw new Error('Discord commands require DISCORD_COMMAND_CHANNEL_ID and a comma-separated DISCORD_ALLOWED_USER_IDS list of Discord IDs.')
+}
+if (config.discordCommandChannelId && !config.discordBotToken) {
+  console.warn('Discord commands disabled: set DISCORD_BOT_TOKEN to enable them.')
+}
 if (config.jumpMinMs > config.jumpMaxMs) {
   throw new Error('JUMP_MIN_SECONDS must be less than or equal to JUMP_MAX_SECONDS.')
 }
@@ -188,6 +207,34 @@ function handleChatAlert(packet) {
 
 let hasBeenOnline = false
 let initialOfflineAlertSent = false
+const processStartedAt = Date.now()
+let successfulConnections = 0
+let lastConnectedAt = 0
+let lastDisconnectedAt = 0
+let jumpingEnabled = config.jumpEnabled
+let forceJumpRequested = false
+let statsLogTimer = null
+
+function formatDuration(milliseconds) {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000))
+  const days = Math.floor(totalSeconds / 86400)
+  const hours = Math.floor((totalSeconds % 86400) / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  return (days ? days + 'd ' : '') + hours + 'h ' + minutes + 'm ' + seconds + 's'
+}
+
+function statsSummary() {
+  const connected = Boolean(activeClient && !activeClient.ended && activeClient.state === 'play')
+  return [
+    'Connection: ' + (connected ? 'connected' : 'disconnected / connecting'),
+    'Process uptime: ' + formatDuration(Date.now() - processStartedAt),
+    'Successful joins: ' + successfulConnections,
+    'Reconnect attempts scheduled: ' + reconnectAttempts,
+    'AFK jumping: ' + (jumpingEnabled ? 'enabled' : 'paused'),
+    'Last disconnect: ' + (lastDisconnectedAt ? formatDuration(Date.now() - lastDisconnectedAt) + ' ago' : 'none this run')
+  ].join('\n')
+}
 
 function sendDiscordServerStatus(title, details, color) {
   if (!discordWebhook) return
@@ -195,7 +242,7 @@ function sendDiscordServerStatus(title, details, color) {
   const body = JSON.stringify({
     embeds: [{
       title: title.slice(0, 256),
-      description: details.slice(0, 3500),
+      description: (details + '\n\n' + statsSummary()).slice(0, 3500),
       color,
       timestamp: new Date().toISOString(),
       footer: { text: 'Solis AFK Bot · ' + config.host }
@@ -395,7 +442,12 @@ function tick(client) {
   movement.tick++
   const now = Date.now()
 
-  if (!movement.jumping && movement.onGround && now >= movement.nextJumpAt) {
+  if (forceJumpRequested && movement.onGround) {
+    forceJumpRequested = false
+    movement.nextJumpAt = now
+  }
+
+  if (jumpingEnabled && !movement.jumping && movement.onGround && now >= movement.nextJumpAt) {
     movement.jumping = true
     movement.onGround = false
     movement.velocityY = 0.42
@@ -494,6 +546,10 @@ function connect() {
   })
   client.on('playerJoin', () => {
     startWatchdog(client)
+    if (!thisClientReachedOnline) {
+      successfulConnections++
+      lastConnectedAt = Date.now()
+    }
     stableConnectionTimer = setTimeout(() => {
       if (activeClient === client && !client.ended) reconnectAttempts = 0
     }, 60000)
@@ -529,6 +585,7 @@ function connect() {
     stopMovement()
     stopWatchdog()
     if (activeClient === client) activeClient = null
+    lastDisconnectedAt = Date.now()
     console.warn(`Disconnected: ${formatReason(reason)}`)
     if (!shuttingDown && thisClientReachedOnline) {
       sendDiscordServerStatus(
@@ -547,6 +604,131 @@ function connect() {
     }
     scheduleReconnect()
   })
+}
+
+function startDiscordCommands() {
+  if (!config.discordBotToken || !config.discordCommandChannelId || config.discordAllowedUserIds.length === 0) {
+    if (config.discordBotToken) console.warn('Discord commands disabled until channel ID and allowed user IDs are configured.')
+    return
+  }
+  if (typeof WebSocket !== 'function') {
+    console.warn('Discord commands disabled: this Node.js runtime does not expose the built-in WebSocket API.')
+    return
+  }
+
+  let socket = null
+  let heartbeatTimer = null
+  let reconnectTimer = null
+  let sequence = null
+  let stopped = false
+  let retryDelay = 5000
+
+  function scheduleGatewayReconnect() {
+    if (stopped || reconnectTimer || shuttingDown) return
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null
+      connectGateway()
+    }, retryDelay)
+    retryDelay = Math.min(retryDelay * 2, 60000)
+  }
+
+  async function reply(channelId, content) {
+    try {
+      const response = await fetch('https://discord.com/api/v10/channels/' + channelId + '/messages', {
+        method: 'POST',
+        headers: { Authorization: 'Bot ' + config.discordBotToken, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: content.slice(0, 1900), allowed_mentions: { parse: [] } })
+      })
+      if (!response.ok) console.warn('Discord command reply failed (HTTP ' + response.status + ').')
+    } catch (error) {
+      console.warn('Discord command reply failed: ' + error.message)
+    }
+  }
+
+  async function handleCommand(message) {
+    if (!message || message.author?.bot || message.channel_id !== config.discordCommandChannelId) return
+    if (!config.discordAllowedUserIds.includes(message.author?.id)) return
+    const content = String(message.content || '').trim().toLowerCase()
+    if (!/^!solis(?:\s|$)/.test(content)) return
+    const command = content.slice('!solis'.length).trim()
+    if (!command || command === 'help') {
+      await reply(message.channel_id, 'Commands: `!solis status`, `!solis stats`, `!solis pause`, `!solis resume`, `!solis jump`.')
+    } else if (command === 'status' || command === 'stats') {
+      await reply(message.channel_id, statsSummary())
+    } else if (command === 'pause') {
+      jumpingEnabled = false
+      forceJumpRequested = false
+      await reply(message.channel_id, 'AFK jumping paused. The Minecraft connection remains active.')
+    } else if (command === 'resume') {
+      jumpingEnabled = true
+      if (movement) movement.nextJumpAt = Date.now() + randomJumpDelay()
+      await reply(message.channel_id, 'AFK jumping resumed.')
+    } else if (command === 'jump') {
+      if (!activeClient || activeClient.ended || activeClient.state !== 'play' || !movement?.ready) {
+        await reply(message.channel_id, 'Cannot jump right now: the Minecraft client is not fully connected.')
+      } else if (!jumpingEnabled) {
+        await reply(message.channel_id, 'Jumping is paused. Use `!solis resume` first.')
+      } else {
+        forceJumpRequested = true
+        await reply(message.channel_id, 'Jump requested; it will trigger when the bot is grounded.')
+      }
+    } else {
+      await reply(message.channel_id, 'Unknown command. Use `!solis help`.')
+    }
+  }
+
+  function connectGateway() {
+    if (stopped || shuttingDown) return
+    try {
+      socket = new WebSocket('wss://gateway.discord.gg/?v=10&encoding=json')
+    } catch (error) {
+      console.warn('Could not start Discord command gateway: ' + error.message)
+      scheduleGatewayReconnect()
+      return
+    }
+
+    socket.addEventListener('message', event => {
+      let payload
+      try { payload = JSON.parse(event.data) } catch { return }
+      if (payload.s != null) sequence = payload.s
+
+      if (payload.op === 10) {
+        clearInterval(heartbeatTimer)
+        heartbeatTimer = setInterval(() => {
+          if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ op: 1, d: sequence }))
+        }, payload.d.heartbeat_interval)
+        socket.send(JSON.stringify({ op: 2, d: {
+          token: config.discordBotToken,
+          intents: (1 << 0) | (1 << 9) | (1 << 15),
+          properties: { os: process.platform, browser: 'solis-afk-bot', device: 'solis-afk-bot' }
+        } }))
+      } else if (payload.op === 7 || payload.op === 9) {
+        try { socket.close() } catch {}
+      } else if (payload.t === 'READY') {
+        retryDelay = 5000
+        console.log('Discord remote commands connected; listening only in the configured command channel.')
+      } else if (payload.t === 'MESSAGE_CREATE') {
+        void handleCommand(payload.d)
+      }
+    })
+    socket.addEventListener('close', () => {
+      clearInterval(heartbeatTimer)
+      heartbeatTimer = null
+      socket = null
+      scheduleGatewayReconnect()
+    })
+    socket.addEventListener('error', () => {
+      try { socket?.close() } catch {}
+    })
+  }
+
+  connectGateway()
+  return () => {
+    stopped = true
+    clearInterval(heartbeatTimer)
+    clearTimeout(reconnectTimer)
+    try { socket?.close() } catch {}
+  }
 }
 
 function shutdown() {
@@ -569,7 +751,18 @@ function shutdown() {
   console.log('AFK bot stopped.')
 }
 
-process.once('SIGINT', shutdown)
-process.once('SIGTERM', shutdown)
+const stopDiscordCommands = startDiscordCommands()
+if (config.statsIntervalMs > 0) {
+  statsLogTimer = setInterval(() => console.log('Runtime stats:\n' + statsSummary()), config.statsIntervalMs)
+}
+
+function shutdownAndCleanup() {
+  if (statsLogTimer) clearInterval(statsLogTimer)
+  if (stopDiscordCommands) stopDiscordCommands()
+  shutdown()
+}
+
+process.once('SIGINT', shutdownAndCleanup)
+process.once('SIGTERM', shutdownAndCleanup)
 
 connect()
