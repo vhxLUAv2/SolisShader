@@ -75,6 +75,7 @@ async function loadSchematic(file) {
   let blockEntities = []
   try {
     if (typeof schematic.getAllBlockEntities === 'function') blockEntities = schematic.getAllBlockEntities()
+    else if (typeof schematic.getAllBlockEntitiesJson === 'function') blockEntities = JSON.parse(schematic.getAllBlockEntitiesJson())
     else if (typeof schematic.get_all_block_entities === 'function') blockEntities = schematic.get_all_block_entities()
   } catch (error) {
     console.warn('Could not read schematic block-entity data:', error.message)
@@ -159,7 +160,8 @@ function supportDirections(block) {
 
   // Slab halves are easier to select from a side face using the click height.
   const sideFaces = [new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1)]
-  if (name.endsWith('_slab') && ['top', 'bottom'].includes(properties.type)) {
+  if ((name.endsWith('_slab') && ['top', 'bottom'].includes(properties.type)) ||
+      (name.endsWith('_stairs') && ['top', 'bottom'].includes(properties.half))) {
     return [...sideFaces, new Vec3(0, 1, 0), new Vec3(0, -1, 0)]
   }
 
@@ -201,7 +203,7 @@ function neighborDerivedProperties(name) {
   }
   if (name === 'minecraft:redstone_wire') return new Set(['north', 'east', 'south', 'west', 'power'])
   if (name === 'minecraft:chorus_plant') return new Set(['north', 'east', 'south', 'west', 'up', 'down'])
-  if (name.endsWith('_door')) return new Set(['open', 'powered', 'hinge'])
+  if (name.endsWith('_door')) return new Set(['open', 'powered'])
   return new Set()
 }
 
@@ -228,8 +230,9 @@ function placementOrientations(block) {
   }
   const properties = block.properties || {}
   if (properties.rotation !== undefined && Number.isFinite(Number(properties.rotation))) {
-    // Standing signs and similar blocks expose 16 rotation states. Verify the
-    // resulting block state rather than trusting an assumed yaw mapping.
+    // Test the expected yaw first, then sweep all 16 states so we verify the
+    // actual server orientation instead of assuming a particular angle mapping.
+    addYaw(Number(properties.rotation) * Math.PI / 8)
     for (let step = 0; step < 16; step++) addYaw(step * Math.PI / 8)
   }
   const byFacing = { south: 0, west: Math.PI / 2, north: Math.PI, east: -Math.PI / 2 }
@@ -725,7 +728,8 @@ async function main() {
     if (isAutoPlacedCompanion(block)) {
       const existing = bot?.blockAt(target)
       if (existing && !isAir(existing.name) &&
-          blockName(existing.name) !== block.name &&
+          !stateMatches(existing, block) &&
+          !stableStateMatches(existing, block) &&
           !await clearTargetIfOccupied(target, block)) {
         return { status: 'target-obstructed', name: block.name }
       }
