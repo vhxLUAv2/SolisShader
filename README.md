@@ -39,17 +39,26 @@ Run `npm run check` to check JavaScript syntax.
 | `MC_VERSION` | `26.3` | Minecraft protocol version |
 | `JUMP_MIN_SECONDS` | `20` | Minimum interval between jumps |
 | `JUMP_MAX_SECONDS` | `28` | Maximum interval between jumps |
+| `AFK_JUMP_ENABLED` | `true` | Start with AFK jumping enabled; `false` keeps the client connected without jumping |
+| `STATS_LOG_INTERVAL_SECONDS` | `0` | Optional runtime stats log interval; `0` disables periodic stats logs |
 | `RECONNECT_DELAY_SECONDS` | `10` | Initial reconnect delay; increases after repeated failures |
 | `RECONNECT_MAX_DELAY_SECONDS` | `120` | Maximum reconnect delay after repeated failures |
 | `CONNECTION_WATCHDOG_SECONDS` | `120` | Reconnect if no server packets arrive for this long (30–900 seconds) |
 | `DISCORD_WEBHOOK_URL` | empty | Optional Discord webhook for server online/offline alerts |
 | `DISCORD_VERIFICATION_WEBHOOK_URL` | empty | Optional dedicated Discord webhook for Falix verification links |
+| `DISCORD_BOT_TOKEN` | empty | Optional Discord bot token for restricted remote commands; keep secret |
+| `DISCORD_COMMAND_CHANNEL_ID` | empty | Discord text channel where remote commands are accepted |
+| `DISCORD_ALLOWED_USER_IDS` | empty | Comma-separated Discord user IDs allowed to issue commands |
 
 The bot requests a view distance of 2 and minimal particles. Its lightweight movement loop sends protocol movement/input packets, a tick-end packet, and a position heartbeat every 20 ticks. It does not retain incoming chunks or track other entities. Reconnect attempts use exponential backoff, starting at `RECONNECT_DELAY_SECONDS` and capping at `RECONNECT_MAX_DELAY_SECONDS`; the retry counter resets after a connection stays joined for 60 seconds. A connection watchdog checks incoming protocol traffic and closes a silent connection after `CONNECTION_WATCHDOG_SECONDS`, allowing the normal reconnect path to recover. The watchdog is a network-silence check, not a guarantee that the Minecraft server itself is healthy.
 
 ## Discord verification alerts
 
 Set `DISCORD_WEBHOOK_URL` to an incoming webhook for server online/offline status alerts, and set `DISCORD_VERIFICATION_WEBHOOK_URL` to a second incoming webhook in the channel where you want Falix verification links. Player chat is no longer mirrored to Discord. When a Falix link or a URL shortly after a verification prompt appears in game chat, the bot sends that link and a short message excerpt only to the dedicated verification webhook. If `DISCORD_VERIFICATION_WEBHOOK_URL` is unset, the detected link is logged to the hosting console rather than sent to Discord. Keep both webhook URLs secret and do not commit real values to GitHub. The bot sends status embeds to the status webhook when a connection first becomes available, is lost, or comes back after a disconnect. Since a disconnect cannot prove whether the server was stopped, restarted, or affected by network trouble, offline alerts say this explicitly. Duplicate verification links are suppressed for the current process. The bot only detects and forwards verification links; it does not open links or complete verification.
+
+## Discord remote commands
+
+Remote controls are optional and disabled unless `DISCORD_BOT_TOKEN`, `DISCORD_COMMAND_CHANNEL_ID`, and `DISCORD_ALLOWED_USER_IDS` are all configured. Create a Discord application/bot, invite it to your server with permission to view the chosen channel and send messages, and enable the Message Content intent in the Developer Portal. Use the bot token only in your hosting panel's secret environment settings; never commit it. The command handler accepts requests only from the configured channel and listed user IDs, ignores bot messages, and supports `!solis help`, `!solis status`, `!solis stats`, `!solis pause`, `!solis resume`, and `!solis jump`. It does not execute arbitrary commands or relay Minecraft/player chat. `pause` stops scheduled AFK jumps but leaves the Minecraft connection running; `jump` requests a jump when grounded. The implementation uses Node.js's built-in WebSocket and fetch APIs, with no additional dependency. Set `STATS_LOG_INTERVAL_SECONDS` to a positive value to print periodic uptime and connection statistics in the hosting console; status webhook embeds also include current process uptime and connection counts.
 
 ## RAM settings
 
