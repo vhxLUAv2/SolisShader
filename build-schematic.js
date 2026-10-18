@@ -596,7 +596,7 @@ async function main() {
     return { status: sawSupport ? lastReason : 'no-support', name: block.name }
   }
   async function runBuild(id) {
-    const failed = new Map()
+    failed.clear()
     for (let pass = 1; pass <= BUILD_MAX_PASSES; pass++) {
       let progressThisPass = 0
       console.log(`Build pass ${pass}/${BUILD_MAX_PASSES}: ${completed.size}/${orderedBlocks.length} blocks already verified.`)
