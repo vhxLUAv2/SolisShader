@@ -3,10 +3,8 @@ import { Schematic } from 'nucleation'
 
 const source = Schematic.create('solis-schematic-parser-smoke')
 source.setBlockWithProperties(0, 0, 0, 'minecraft:oak_stairs', {
-  facing: 'east',
-  half: 'bottom',
-  shape: 'straight'
-})
+  JSON.stringify({ facing: 'east', half: 'bottom', shape: 'straight' })
+)
 source.setBlockWithNbt(
   1, 0, 0,
   'minecraft:chest[facing=south]',
