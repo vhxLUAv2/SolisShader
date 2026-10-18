@@ -1,6 +1,6 @@
 # Solis AFK Bot
 
-A small Minecraft Java Edition 26.3 AFK jumper intended for low-storage and low-memory hosting panels. It uses the Minecraft protocol client directly instead of Mineflayer, so it does not keep a world, chunk, block, inventory, or entity model in memory.
+A Minecraft Java Edition 26.3 AFK bot with two modes: the original low-memory protocol-client AFK mode (`npm start`) and a separate autonomous schematic-builder mode (`npm run build`). The builder uses Mineflayer physics/world tracking and pathfinding, so it needs more memory than the AFK-only mode.
 
 ## Defaults
 
@@ -48,7 +48,7 @@ Run `npm run check` to check JavaScript syntax.
 | `DISCORD_VERIFICATION_WEBHOOK_URL` | empty | Optional dedicated Discord webhook for Falix verification links |
 | `DISCORD_BOT_TOKEN` | empty | Optional Discord bot token for restricted remote commands; keep secret |
 | `DISCORD_COMMAND_CHANNEL_ID` | empty | Discord text channel where remote commands are accepted |
-| `DISCORD_ALLOWED_USER_IDS` | empty | Comma-separated Discord user IDs allowed to issue commands |
+| `DISCORD_ALLOWED_USER_IDS` | empty | Comma-separated Discord user IDs allowed to issue commands |\n| `BUILD_MAX_BLOCKS` | `50000` | Maximum non-air blocks accepted in one schematic build |\n| `BUILD_BLOCK_ATTEMPTS` | `3` | Maximum placement attempts per block before it is reported unresolved |\n| `BUILD_DELAY_MS` | `250` | Delay between placement operations in milliseconds (minimum 50) |\n| `BUILD_STATE_FILE` | `./build-state.json` | Local file used to save build progress |
 
 The bot requests a view distance of 2 and minimal particles. Its lightweight movement loop sends protocol movement/input packets, a tick-end packet, and a position heartbeat every 20 ticks. It does not retain incoming chunks or track other entities. Reconnect attempts use exponential backoff, starting at `RECONNECT_DELAY_SECONDS` and capping at `RECONNECT_MAX_DELAY_SECONDS`; the retry counter resets after a connection stays joined for 60 seconds. A connection watchdog checks incoming protocol traffic and closes a silent connection after `CONNECTION_WATCHDOG_SECONDS`, allowing the normal reconnect path to recover. The watchdog is a network-silence check, not a guarantee that the Minecraft server itself is healthy.
 
@@ -65,3 +65,25 @@ Remote controls are optional and disabled unless `DISCORD_BOT_TOKEN`, `DISCORD_C
 The local `npm start` command caps the V8 old-space heap at 128 MB. If the hosting panel launches `node index.js` directly, set `NODE_OPTIONS=--max-old-space-size=128` in the panel's environment variables to apply the same heap limit there. This limits the JavaScript heap, not total process RAM. Do not set a heap cap above your hosting plan's memory budget.
 
 If the server has a non-default port, set `MC_PORT` in the panel. If the server rejects protocol 26.3 or the connection is kicked, check the exact server version and its offline-mode/idle rules. Protocol compatibility and live joining still need testing on the target server.
+
+
+## Autonomous schematic builder (experimental)
+
+The builder is a separate process from the lightweight AFK mode. It accepts Sponge `.schem` and Litematica `.litematic` files through the Nucleation parser, and uses the Minecraft 26.3-capable `@wp2508/mineflayer` client with `mineflayer-pathfinder` for physics and navigation.
+
+1. Put the schematic file in the repository folder.
+2. Install dependencies with `npm install`.
+3. Copy `.env.example` to `.env` and configure `MC_HOST`, `MC_PORT`, `MC_USERNAME`, and `MC_VERSION`.
+4. Run the builder with the target world's origin coordinates, for example:
+
+```powershell
+npm run build -- .\\schematics\\house.litematic 100 64 100
+# Or:
+npm run build -- .\\schematics\\house.schem 100 64 100
+```
+
+The three coordinates are the world position for the schematic's local origin. The builder moves around to reach placement positions, lets pathfinding navigate around ordinary obstacles, and can dig blocks that obstruct its route. It only places blocks already available in the bot's inventory; it does not collect/craft missing materials or destroy existing blocks to clear a target. Keep enough materials in the bot inventory before starting. Build progress is written to `BUILD_STATE_FILE` after successful placements and is reused when the same schematic path and origin are run again. On disconnect, the builder saves progress and reconnects.
+
+The initial builder is intentionally bounded by `BUILD_MAX_BLOCKS` (default 50,000 non-air blocks) and uses a 512 MB V8 heap cap rather than the 128 MB AFK cap. Lower the block limit for small hosting plans. Set `BUILD_DELAY_MS` higher if the server is laggy. Use `Ctrl+C` to stop; saved progress remains available for a later run.
+
+**Known limitations:** this is an experimental first pass, not yet verified against your live server. It uses schematic block names for placement; exact block-state orientation, tile-entity contents (such as chest inventories), entities, and complex multi-block placement are not guaranteed to reproduce exactly. Blocks that need a supporting block may remain unresolved until a later pass has created that support. The builder reports unresolved blocks rather than looping forever. Test in a disposable area/world first. Run `npm run check` for syntax checks, but a real-server build test is still required.
