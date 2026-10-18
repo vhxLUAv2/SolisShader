@@ -371,6 +371,7 @@ async function main() {
     const schematicDirectory = path.resolve(process.env.SCHEMATICS_DIR || './schematics')
     let candidates = []
     try {
+      fs.mkdirSync(schematicDirectory, { recursive: true })
       candidates = fs.readdirSync(schematicDirectory, { withFileTypes: true })
         .filter(entry => entry.isFile() && /\.(?:schem|litematic)$/i.test(entry.name))
         .map(entry => path.join(schematicDirectory, entry.name))
