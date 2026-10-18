@@ -69,21 +69,53 @@ If the server has a non-default port, set `MC_PORT` in the panel. If the server 
 
 ## Autonomous schematic builder (experimental)
 
-The builder is a separate process from the lightweight AFK mode. It accepts Sponge `.schem` and Litematica `.litematic` files through the Nucleation parser, and uses the Minecraft 26.3-capable `@wp2508/mineflayer` client with `mineflayer-pathfinder` for physics and navigation.
+This mode is separate from `npm start`. It uses the Minecraft 26.3-capable Mineflayer fork, pathfinding, and Nucleation for Sponge `.schem` and Litematica `.litematic` parsing.
 
-1. Put the schematic file in the repository folder.
-2. Install dependencies with `npm install`.
-3. Copy `.env.example` to `.env` and configure `MC_HOST`, `MC_PORT`, `MC_USERNAME`, and `MC_VERSION`.
-4. Run the builder with the target world's origin coordinates, for example:
+### Where to put your schematic
 
-```powershell
-npm run build -- .\\schematics\\house.litematic 100 64 100
-# Or:
-npm run build -- .\\schematics\\house.schem 100 64 100
+Create a `schematics` folder in the repository root, beside `package.json`, and put your file there. Keep the actual schematic file on your own machine or host; schematic files are ignored by Git so you do not accidentally commit large or private builds.
+
+Example folder layout:
+
+```text
+SolisShader/
+├─ package.json
+├─ build-schematic.js
+├─ .env
+└─ schematics/
+   ├─ house.litematic
+   └─ tower.schem
 ```
 
-The three coordinates are the world position for the schematic's local origin. The builder moves around to reach placement positions, lets pathfinding navigate around ordinary obstacles, and can dig blocks that obstruct its route. It only places blocks already available in the bot's inventory; it does not collect/craft missing materials or destroy existing blocks to clear a target. Keep enough materials in the bot inventory before starting. Build progress is written to `BUILD_STATE_FILE` after successful placements and is reused when the same schematic path and origin are run again. On disconnect, the builder saves progress and reconnects.
+On Windows PowerShell:
 
-The initial builder is intentionally bounded by `BUILD_MAX_BLOCKS` (default 50,000 non-air blocks) and uses a 512 MB V8 heap cap rather than the 128 MB AFK cap. Lower the block limit for small hosting plans. Set `BUILD_DELAY_MS` higher if the server is laggy. Use `Ctrl+C` to stop; saved progress remains available for a later run.
+```powershell
+New-Item -ItemType Directory -Force .\schematics
+Copy-Item "$HOME\Downloads\house.litematic" .\schematics\
+npm install
+npm run build -- .\schematics\house.litematic 100 64 100
+```
 
-**Known limitations:** this is an experimental first pass, not yet verified against your live server. It uses schematic block names for placement; exact block-state orientation, tile-entity contents (such as chest inventories), entities, and complex multi-block placement are not guaranteed to reproduce exactly. Blocks that need a supporting block may remain unresolved until a later pass has created that support. The builder reports unresolved blocks rather than looping forever. Test in a disposable area/world first. Run `npm run check` for syntax checks, but a real-server build test is still required.
+Or use a Sponge schematic:
+
+```powershell
+npm run build -- .\schematics\tower.schem 100 64 100
+```
+
+The three numbers are the world coordinates added to each local schematic coordinate. For example, `100 64 100` means the schematic's local origin is placed at world X=100, Y=64, Z=100. Make sure the target area is one where the bot is allowed to build.
+
+### Creative mode and block placement
+
+The builder does not change the bot's game mode. The server must already have this bot in Creative mode and allow creative inventory-slot updates. When that API is available, the builder generates the required block/item stacks as needed; you do **not** need to preload every material. Fluids and a small number of blocks use a different item than their block ID, and some block IDs have no directly placeable item, so those may still be unresolved.
+
+The builder reads block-state properties rather than only block names. It tries different player orientations for directional blocks and verifies the actual placed state. It makes multiple bounded passes so blocks that need supports or neighboring blocks can be retried after later placements. Pathfinding can dig ordinary route obstructions; the builder can also remove a wrong solid block at a schematic target coordinate to make room. **Use a disposable area/world first:** target-position blocks that do not match the schematic can be destroyed.
+
+Container block entities with an `Items` list are restored after block placement when the server exposes the required inventory operations. Item IDs, stack counts, and saved slots are attempted. This is not yet a guarantee of byte-for-byte NBT fidelity: custom item components, enchanted/renamed items, signs, banners, spawners, and every specialized block entity still need further testing. Doors, beds, and other multi-block blocks can cause neighboring halves to appear automatically; the later passes verify those results, but unusual blocks may remain unresolved.
+
+### Progress, limits, and current caveats
+
+Progress is saved to `BUILD_STATE_FILE` after successful placements, including which container inventories have been restored. A checkpoint is reused only for the same schematic file, file hash, and origin. Live world blocks are still checked before a saved block is skipped, so missing or incorrectly oriented blocks can be repaired on a subsequent run. On disconnect, the builder saves state and reconnects.
+
+The default schematic limit is `BUILD_MAX_BLOCKS=50000`; the builder uses a 512 MB V8 heap cap rather than the AFK mode's 128 MB cap. `BUILD_BLOCK_ATTEMPTS` bounds per-block retries, and `BUILD_MAX_PASSES` bounds full rechecks. Reduce the block limit for small hosting plans and increase `BUILD_DELAY_MS` if the server is laggy. Stop with `Ctrl+C`; progress remains saved.
+
+The code passes syntax/install CI, but a real Minecraft 26.3 build test is still required. The builder is experimental. Exact state reproduction and container NBT fidelity depend on the block's in-game placement rules and what the server permits the client to do.
