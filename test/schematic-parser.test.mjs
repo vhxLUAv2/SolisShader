@@ -6,10 +6,9 @@ source.setBlockFromString(
   0, 0, 0,
   'minecraft:oak_stairs[facing=east,half=bottom,shape=straight]'
 )
-source.setBlockWithNbt(
+source.setBlockFromString(
   1, 0, 0,
-  'minecraft:chest[facing=south]',
-  '{"Items":[{"Slot":0,"id":"minecraft:diamond","Count":3}]}'
+  'minecraft:chest[facing=south]{Items:[{Slot:0b,id:"minecraft:diamond",Count:3b}]}'
 )
 
 const formats = [
