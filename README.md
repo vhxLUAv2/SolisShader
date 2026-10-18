@@ -13,7 +13,7 @@ The server must accept offline-mode players. The bot does not change server sett
 1. Stop the server process.
 2. Set the startup file to `index.js` for the original low-memory AFK mode.
 3. Run `npm install --no-audit --no-fund` so dependencies for both AFK and schematic-builder modes are installed.
-4. Start the server with `node index.js`. The server and username already have defaults in the code. Use `npm run build -- <file> <x> <y> <z>` in a shell-capable environment to run schematic builds; the panel must support command-line arguments for that mode.
+4. For AFK mode, start `node index.js`. To run the schematic builder instead, set the startup command to `npm run build`; it auto-detects the only `.schem` or `.litematic` file in `schematics/`. Upload exactly one schematic there, or pass a filename explicitly if you keep multiple files. Set the build origin with `BUILD_ORIGIN_X`, `BUILD_ORIGIN_Y`, and `BUILD_ORIGIN_Z` in the panel (defaults: `100, 64, 100`). Builder mode replaces AFK mode while it is running.
 
 The server address and bot name are already set, so a `.env` file is not required on the hosting panel. To override the defaults, set the variables below in the panel's environment settings.
 
@@ -49,6 +49,10 @@ Run `npm run check` to check JavaScript syntax and run Nucleation round-trip smo
 | `DISCORD_BOT_TOKEN` | empty | Optional Discord bot token for restricted remote commands; keep secret |
 | `DISCORD_COMMAND_CHANNEL_ID` | empty | Discord text channel where remote commands are accepted |
 | `DISCORD_ALLOWED_USER_IDS` | empty | Comma-separated Discord user IDs allowed to issue commands |
+| `SCHEMATICS_DIR` | `./schematics` | Directory scanned when no schematic filename is supplied |
+| `BUILD_ORIGIN_X` | `100` | World X coordinate for auto-detected builds |
+| `BUILD_ORIGIN_Y` | `64` | World Y coordinate for auto-detected builds |
+| `BUILD_ORIGIN_Z` | `100` | World Z coordinate for auto-detected builds |
 | `BUILD_MAX_BLOCKS` | `50000` | Maximum non-air blocks accepted in one schematic build |
 | `BUILD_BLOCK_ATTEMPTS` | `3` | Maximum placement attempts per block before it is reported unresolved |
 | `BUILD_MAX_PASSES` | `4` | Maximum complete placement/recheck passes for neighbor-dependent blocks |
@@ -92,22 +96,24 @@ SolisShader/
    └─ tower.schem
 ```
 
-On Windows PowerShell:
+On Bot-Hosting.net, create `/home/container/schematics/` in the Files tab and upload your `.schem` or `.litematic` file into it. Set the startup command to:
+
+```bash
+npm run build
+```
+
+The builder auto-detects the file when exactly one supported schematic is present. If the folder contains multiple schematics, it stops with a list of filenames rather than choosing a potentially wrong build. Remove the extras or explicitly pass the intended filename and coordinates.
+
+For local Windows testing:
 
 ```powershell
 New-Item -ItemType Directory -Force .\schematics
 Copy-Item "$HOME\Downloads\house.litematic" .\schematics\
 npm install
-npm run build -- .\schematics\house.litematic 100 64 100
+npm run build
 ```
 
-Or use a Sponge schematic:
-
-```powershell
-npm run build -- .\schematics\tower.schem 100 64 100
-```
-
-The three numbers are the world coordinates added to each local schematic coordinate. For example, `100 64 100` means the schematic's local origin is placed at world X=100, Y=64, Z=100. Make sure the target area is one where the bot is allowed to build.
+The default origin is world X=100, Y=64, Z=100. Change `BUILD_ORIGIN_X`, `BUILD_ORIGIN_Y`, and `BUILD_ORIGIN_Z` in `.env` or the hosting panel to choose where the schematic is built. The origin coordinates are added to each local schematic coordinate. You can still specify a file and origin directly, for example `npm run build -- .\schematics\house.litematic 100 64 100`. Make sure the target area is one where the bot is allowed to build.
 
 ### Creative mode and block placement
 
