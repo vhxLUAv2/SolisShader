@@ -24,12 +24,13 @@ function readInteger(value, name) {
   return value
 }
 
-function isAir(name) {
-  return !name || name === 'minecraft:air' || name === 'minecraft:cave_air' || name === 'minecraft:void_air'
+function blockName(name) {
+  const plain = String(name || '').split('[')[0].split('{')[0]
+  return plain && !plain.includes(':') ? 'minecraft:' + plain : plain
 }
 
-function blockName(name) {
-  return String(name || '').split('[')[0].split('{')[0]
+function isAir(name) {
+  return ['minecraft:air', 'minecraft:cave_air', 'minecraft:void_air'].includes(blockName(name))
 }
 
 async function loadSchematic(file) {
@@ -244,7 +245,7 @@ async function main() {
   }
 
   async function placeTarget(block, target, id) {
-    const itemName = block.name.replace(/^minecraft:/, '')
+    const itemName = block.name.replace(/^minecraft:/, '').replace(/^.*:/, '')
     const item = bot.inventory.items().find(entry => entry.name === itemName)
     if (!item) return { status: 'missing-material', name: block.name }
 
@@ -258,8 +259,7 @@ async function main() {
     for (const direction of faces) {
       const candidate = target.minus(direction)
       const worldBlock = bot.blockAt(candidate)
-      if (worldBlock && worldBlock.boundingBox === 'block' && worldBlock.name !== 'air' &&
-          worldBlock.name !== 'cave_air' && worldBlock.name !== 'void_air') {
+      if (worldBlock && worldBlock.boundingBox === 'block' && !isAir(worldBlock.name)) {
         reference = worldBlock
         face = direction
         break
