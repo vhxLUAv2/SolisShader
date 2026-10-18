@@ -35,6 +35,9 @@ if (!config.version) throw new Error('MC_VERSION must not be empty.')
 if (config.jumpMinMs > config.jumpMaxMs) {
   throw new Error('JUMP_MIN_SECONDS must be less than or equal to JUMP_MAX_SECONDS.')
 }
+if (config.reconnectDelayMs > config.reconnectMaxDelayMs) {
+  throw new Error('RECONNECT_MAX_DELAY_SECONDS must be greater than or equal to RECONNECT_DELAY_SECONDS.')
+}
 
 
 function parseDiscordWebhook(value, settingName) {
