@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node --max-old-space-size=128 --env-file-if-exists=.env index.js",
     "build": "node --max-old-space-size=512 --env-file-if-exists=.env build-schematic.js",
-    "check": "node --check index.js && node --check build-schematic.js"
+    "check": "node --check index.js && node --check build-schematic.js && node --check test/schematic-parser.test.mjs && node test/schematic-parser.test.mjs"
   },
   "engines": {
     "node": ">=22.9.0"
