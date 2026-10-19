@@ -1,22 +1,13 @@
 'use strict'
 
 const minecraftProtocol = require('@wp2508/minecraft-protocol')
-const https = require('https')
-
-function readBoolean(name, fallback) {
-  const raw = process.env[name]
-  if (raw == null || raw.trim() === '') return fallback
-  if (/^(true|1|yes|on)$/i.test(raw.trim())) return true
-  if (/^(false|0|no|off)$/i.test(raw.trim())) return false
-  throw new Error(`${name} must be true or false.`)
-}
 
 function readInteger(name, fallback, minimum, maximum) {
   const raw = process.env[name]
   if (raw == null || raw.trim() === '') return fallback
   const value = Number(raw)
   if (!Number.isInteger(value) || value < minimum || value > maximum) {
-    throw new Error(`${name} must be an integer between ${minimum} and ${maximum}.`)
+    throw new Error(name + ' must be an integer between ' + minimum + ' and ' + maximum + '.')
   }
   return value
 }
@@ -26,18 +17,11 @@ const config = {
   port: readInteger('MC_PORT', 25565, 1, 65535),
   username: (process.env.MC_USERNAME || 'bot').trim(),
   version: (process.env.MC_VERSION || '26.3').trim(),
-  jumpEnabled: readBoolean('AFK_JUMP_ENABLED', true),
-  statsIntervalMs: readInteger('STATS_LOG_INTERVAL_SECONDS', 0, 0, 86400) * 1000,
-  discordBotToken: (process.env.DISCORD_BOT_TOKEN || '').trim(),
-  discordCommandChannelId: (process.env.DISCORD_COMMAND_CHANNEL_ID || '').trim(),
-  discordAllowedUserIds: (process.env.DISCORD_ALLOWED_USER_IDS || '').split(',').map(value => value.trim()).filter(Boolean),
   jumpMinMs: readInteger('JUMP_MIN_SECONDS', 20, 1, 3600) * 1000,
   jumpMaxMs: readInteger('JUMP_MAX_SECONDS', 28, 1, 3600) * 1000,
   reconnectDelayMs: readInteger('RECONNECT_DELAY_SECONDS', 10, 1, 3600) * 1000,
   reconnectMaxDelayMs: readInteger('RECONNECT_MAX_DELAY_SECONDS', 120, 10, 3600) * 1000,
-  watchdogTimeoutMs: readInteger('CONNECTION_WATCHDOG_SECONDS', 120, 30, 900) * 1000,
-  discordWebhookUrl: (process.env.DISCORD_WEBHOOK_URL || '').trim(),
-  verificationWebhookUrl: (process.env.DISCORD_VERIFICATION_WEBHOOK_URL || '').trim()
+  watchdogTimeoutMs: readInteger('CONNECTION_WATCHDOG_SECONDS', 120, 30, 900) * 1000
 }
 
 if (!config.host) throw new Error('MC_HOST must not be empty.')
@@ -45,12 +29,6 @@ if (!/^[A-Za-z0-9_]{3,16}$/.test(config.username)) {
   throw new Error('MC_USERNAME must contain 3–16 letters, numbers, or underscores.')
 }
 if (!config.version) throw new Error('MC_VERSION must not be empty.')
-if (config.discordBotToken && (!config.discordCommandChannelId || !/^\d{17,20}$/.test(config.discordCommandChannelId) || config.discordAllowedUserIds.length === 0 || config.discordAllowedUserIds.some(id => !/^\d{17,20}$/.test(id)))) {
-  throw new Error('Discord commands require DISCORD_COMMAND_CHANNEL_ID and a comma-separated DISCORD_ALLOWED_USER_IDS list of Discord IDs.')
-}
-if (config.discordCommandChannelId && !config.discordBotToken) {
-  console.warn('Discord commands disabled: set DISCORD_BOT_TOKEN to enable them.')
-}
 if (config.jumpMinMs > config.jumpMaxMs) {
   throw new Error('JUMP_MIN_SECONDS must be less than or equal to JUMP_MAX_SECONDS.')
 }
@@ -58,226 +36,10 @@ if (config.reconnectDelayMs > config.reconnectMaxDelayMs) {
   throw new Error('RECONNECT_MAX_DELAY_SECONDS must be greater than or equal to RECONNECT_DELAY_SECONDS.')
 }
 
-
-function parseDiscordWebhook(value, settingName) {
-  if (!value) return null
-  try {
-    const parsedWebhook = new URL(value)
-    if (
-      parsedWebhook.protocol !== 'https:' ||
-      !['discord.com', 'discordapp.com'].includes(parsedWebhook.hostname) ||
-      !/^\/api\/webhooks\/\d+\/[^/]+\/?$/.test(parsedWebhook.pathname)
-    ) {
-      throw new Error('Invalid Discord webhook URL')
-    }
-    return parsedWebhook
-  } catch {
-    console.warn(settingName + ' disabled: it must be a valid HTTPS Discord webhook URL.')
-    return null
-  }
-}
-
-const discordWebhook = parseDiscordWebhook(config.discordWebhookUrl, 'DISCORD_WEBHOOK_URL')
-const verificationWebhook = parseDiscordWebhook(config.verificationWebhookUrl, 'DISCORD_VERIFICATION_WEBHOOK_URL')
-const alertedVerificationLinks = new Set()
-let verificationPromptUntil = 0
-
-function collectChatStrings(value, output, visited, depth = 0) {
-  if (output.length >= 128 || depth > 12) return
-  if (typeof value === 'string') {
-    output.push(value.slice(0, 3000))
-    return
-  }
-  if (!value || typeof value !== 'object' || Buffer.isBuffer(value) || visited.has(value)) return
-
-  visited.add(value)
-  if (Array.isArray(value)) {
-    for (const child of value) collectChatStrings(child, output, visited, depth + 1)
-    return
-  }
-
-  for (const [key, child] of Object.entries(value)) {
-    if (['signature', 'previousMessages', 'lastSeenMessages'].includes(key)) continue
-    collectChatStrings(child, output, visited, depth + 1)
-  }
-}
-
-function sendDiscordVerificationAlert(url, message) {
-  if (alertedVerificationLinks.has(url)) return
-  if (alertedVerificationLinks.size >= 100) {
-    alertedVerificationLinks.delete(alertedVerificationLinks.values().next().value)
-  }
-  alertedVerificationLinks.add(url)
-
-  if (!verificationWebhook) {
-    console.warn('Falix verification link detected. Set DISCORD_VERIFICATION_WEBHOOK_URL to send it to a dedicated Discord channel: ' + url)
-    return
-  }
-
-  const summary = message.replace(/\s+/g, ' ').trim().slice(0, 900)
-  const safeHost = config.host.replace(/`/g, '')
-  const body = JSON.stringify({
-    embeds: [{
-      title: 'Falix Hosting Verification Required',
-      description: 'The Minecraft hosting service is requesting verification to keep your server running.\n\n[**Open verification link**](' + url + ')',
-      color: 0xF0B232,
-      fields: [
-        {
-          name: 'Minecraft Server',
-          value: '`' + safeHost + '`',
-          inline: true
-        },
-        {
-          name: 'Action Needed',
-          value: 'Open the verification link above and complete the requested check.',
-          inline: true
-        },
-        ...(summary ? [{
-          name: 'Original Server Message',
-          value: summary,
-          inline: false
-        }] : [])
-      ],
-      footer: {
-        text: 'Solis AFK Bot • Verification Alerts'
-      },
-      timestamp: new Date().toISOString()
-    }],
-    allowed_mentions: { parse: [] }
-  })
-
-  const request = https.request({
-    hostname: verificationWebhook.hostname,
-    port: verificationWebhook.port || 443,
-    path: verificationWebhook.pathname + verificationWebhook.search,
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(body)
-    }
-  }, response => {
-    response.resume()
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      console.warn('Discord webhook rejected the verification alert (HTTP ' + response.statusCode + ').')
-      return
-    }
-    console.log('Forwarded Falix verification link to Discord.')
-  })
-
-  request.setTimeout(8000, () => request.destroy(new Error('Discord webhook timed out')))
-  request.on('error', error => {
-    console.warn('Discord webhook delivery failed: ' + error.message)
-  })
-  request.end(body)
-}
-
-function handleChatAlert(packet) {
-  const parts = []
-  collectChatStrings(packet, parts, new Set())
-  const message = parts.join(' ').replace(/\s+/g, ' ').trim()
-  if (!message) return
-
-  const verificationContext = /(falix|verif(?:y|ication)|captcha|add\s+time|extend.{0,30}timer|keep.{0,50}server.{0,30}running|server.{0,40}(?:stop|shutdown|suspend|expire))/i.test(message)
-  if (verificationContext) verificationPromptUntil = Date.now() + 60000
-
-  const urls = message.match(/https?:\/\/[^\s<>"']+/gi) || []
-  for (const candidate of new Set(urls)) {
-    const url = candidate.replace(/[.,!?;:)\]}]+$/, '')
-    let parsed
-    try {
-      parsed = new URL(url)
-    } catch {
-      continue
-    }
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') continue
-
-    const host = parsed.hostname.toLowerCase()
-    const isFalixLink = host === 'falix.gg' ||
-      host.endsWith('.falix.gg') ||
-      host === 'falixnodes.net' ||
-      host.endsWith('.falixnodes.net')
-
-    if (isFalixLink || Date.now() <= verificationPromptUntil) {
-      sendDiscordVerificationAlert(url, message)
-    }
-  }
-}
-
-
-
-let hasBeenOnline = false
-let initialOfflineAlertSent = false
-const processStartedAt = Date.now()
-let successfulConnections = 0
-let lastConnectedAt = 0
-let lastDisconnectedAt = 0
-let jumpingEnabled = config.jumpEnabled
-let forceJumpRequested = false
-let statsLogTimer = null
-
-function formatDuration(milliseconds) {
-  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000))
-  const days = Math.floor(totalSeconds / 86400)
-  const hours = Math.floor((totalSeconds % 86400) / 3600)
-  const minutes = Math.floor((totalSeconds % 3600) / 60)
-  const seconds = totalSeconds % 60
-  return (days ? days + 'd ' : '') + hours + 'h ' + minutes + 'm ' + seconds + 's'
-}
-
-function statsSummary() {
-  const connected = Boolean(activeClient && !activeClient.ended && activeClient.state === 'play')
-  return [
-    'Connection: ' + (connected ? 'connected' : 'disconnected / connecting'),
-    'Process uptime: ' + formatDuration(Date.now() - processStartedAt),
-    'Successful joins: ' + successfulConnections,
-    'Reconnect attempts scheduled: ' + reconnectAttempts,
-    'AFK jumping: ' + (jumpingEnabled ? 'enabled' : 'paused'),
-    'Last disconnect: ' + (lastDisconnectedAt ? formatDuration(Date.now() - lastDisconnectedAt) + ' ago' : 'none this run')
-  ].join('\n')
-}
-
-function sendDiscordServerStatus(title, details, color) {
-  if (!discordWebhook) return
-
-  const body = JSON.stringify({
-    embeds: [{
-      title: title.slice(0, 256),
-      description: (details + '\n\n' + statsSummary()).slice(0, 3500),
-      color,
-      timestamp: new Date().toISOString(),
-      footer: { text: 'Solis AFK Bot · ' + config.host }
-    }],
-    allowed_mentions: { parse: [] }
-  })
-
-  const request = https.request({
-    hostname: discordWebhook.hostname,
-    port: discordWebhook.port || 443,
-    path: discordWebhook.pathname + discordWebhook.search,
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(body)
-    }
-  }, response => {
-    response.resume()
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      console.warn('Discord server-status alert rejected (HTTP ' + response.statusCode + ').')
-    }
-  })
-
-  request.setTimeout(8000, () => request.destroy(new Error('Discord webhook timed out')))
-  request.on('error', error => {
-    console.warn('Discord server-status alert failed: ' + error.message)
-  })
-  request.end(body)
-}
-
 let activeClient = null
 let reconnectTimer = null
 let movementTimer = null
 let watchdogTimer = null
-let stableConnectionTimer = null
 let reconnectAttempts = 0
 let lastServerPacketAt = 0
 let shuttingDown = false
@@ -286,11 +48,8 @@ let movement = null
 function newMovementState() {
   return {
     ready: false,
-    x: 0,
-    y: 0,
-    z: 0,
-    yaw: 0,
-    pitch: 0,
+    x: 0, y: 0, z: 0,
+    yaw: 0, pitch: 0,
     baseY: 0,
     velocityY: 0,
     onGround: false,
@@ -318,38 +77,7 @@ function relativeFlag(flags, axis, bit) {
 function formatReason(reason) {
   if (reason == null) return 'no reason supplied'
   if (typeof reason === 'string') return reason
-  try {
-    return JSON.stringify(reason)
-  } catch {
-    return String(reason)
-  }
-}
-
-function stopWatchdog() {
-  if (watchdogTimer) clearInterval(watchdogTimer)
-  watchdogTimer = null
-  if (stableConnectionTimer) clearTimeout(stableConnectionTimer)
-  stableConnectionTimer = null
-}
-
-function startWatchdog(client) {
-  stopWatchdog()
-  lastServerPacketAt = Date.now()
-  watchdogTimer = setInterval(() => {
-    if (shuttingDown || activeClient !== client || client.ended || client.state !== 'play') return
-    const silentFor = Date.now() - lastServerPacketAt
-    if (silentFor < config.watchdogTimeoutMs) return
-    console.warn(`Connection watchdog: no server packets for ${Math.round(silentFor / 1000)} seconds; reconnecting.`)
-    stopMovement()
-    stopWatchdog()
-    try {
-      if (client.socket && !client.socket.destroyed) client.socket.destroy(new Error('Connection watchdog timeout'))
-      else client.end('Connection watchdog timeout')
-    } catch (error) {
-      console.warn('Could not close stale connection cleanly: ' + error.message)
-      client.end('Connection watchdog timeout')
-    }
-  }, 15000)
+  try { return JSON.stringify(reason) } catch { return String(reason) }
 }
 
 function stopMovement() {
@@ -358,12 +86,19 @@ function stopMovement() {
   if (movement) movement.ready = false
 }
 
+function stopWatchdog() {
+  if (watchdogTimer) clearInterval(watchdogTimer)
+  watchdogTimer = null
+}
+
 function scheduleReconnect() {
   if (shuttingDown || reconnectTimer) return
-  const exponent = Math.min(reconnectAttempts, 10)
-  const delay = Math.min(config.reconnectDelayMs * (2 ** exponent), config.reconnectMaxDelayMs)
+  const delay = Math.min(
+    config.reconnectDelayMs * (2 ** Math.min(reconnectAttempts, 10)),
+    config.reconnectMaxDelayMs
+  )
   reconnectAttempts++
-  console.log(`Reconnect attempt ${reconnectAttempts} scheduled in ${Math.ceil(delay / 1000)} seconds.`)
+  console.log('Reconnect scheduled in ' + Math.ceil(delay / 1000) + ' seconds.')
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null
     connect()
@@ -379,15 +114,12 @@ function sendMovement(client, name) {
     pitch: movement.pitch,
     onGround: movement.onGround,
     tick: movement.tick,
-    flags: {
-      onGround: movement.onGround,
-      hasHorizontalCollision: false
-    }
+    flags: { onGround: movement.onGround, hasHorizontalCollision: false }
   })
 }
 
 function handleServerPosition(client, packet) {
-  if (activeClient !== client || client.ended) return
+  if (activeClient !== client || client.ended || !movement) return
 
   const flags = packet.flags
   const x = relativeFlag(flags, 'x', 1) ? movement.x + packet.x : packet.x
@@ -413,15 +145,7 @@ function handleServerPosition(client, packet) {
   movement.jumpKeyTicks = 0
   movement.nextJumpAt = Date.now() + randomJumpDelay()
 
-  client.write('teleport_confirm', {
-    teleportId: packet.teleportId,
-    x,
-    y,
-    z,
-    yaw,
-    pitch
-  })
-
+  client.write('teleport_confirm', { teleportId: packet.teleportId, x, y, z, yaw, pitch })
   movement.lastSentX = x
   movement.lastSentY = y
   movement.lastSentZ = z
@@ -432,7 +156,7 @@ function handleServerPosition(client, packet) {
   if (!movement.ready) {
     movement.ready = true
     movementTimer = setInterval(() => tick(client), 50)
-    console.log('Position synchronized. Low-memory AFK jumping is active.')
+    console.log('Position synchronized. AFK jumping is active.')
   }
 }
 
@@ -441,13 +165,7 @@ function tick(client) {
 
   movement.tick++
   const now = Date.now()
-
-  if (forceJumpRequested && movement.onGround) {
-    forceJumpRequested = false
-    movement.nextJumpAt = now
-  }
-
-  if (jumpingEnabled && !movement.jumping && movement.onGround && now >= movement.nextJumpAt) {
+  if (!movement.jumping && movement.onGround && now >= movement.nextJumpAt) {
     movement.jumping = true
     movement.onGround = false
     movement.velocityY = 0.42
@@ -471,13 +189,8 @@ function tick(client) {
 
   client.write('player_input', {
     inputs: {
-      forward: false,
-      backward: false,
-      left: false,
-      right: false,
-      jump,
-      shift: false,
-      sprint: false
+      forward: false, backward: false, left: false, right: false,
+      jump, shift: false, sprint: false
     }
   })
 
@@ -496,10 +209,7 @@ function tick(client) {
   } else if (movement.onGround !== movement.lastSentOnGround) {
     client.write('flying', {
       onGround: movement.onGround,
-      flags: {
-        onGround: movement.onGround,
-        hasHorizontalCollision: false
-      }
+      flags: { onGround: movement.onGround, hasHorizontalCollision: false }
     })
     movement.lastSentOnGround = movement.onGround
   }
@@ -509,9 +219,9 @@ function tick(client) {
 
 function connect() {
   if (shuttingDown || activeClient) return
-
   movement = newMovementState()
-  console.log(`Connecting to ${config.host}:${config.port} as ${config.username} (Minecraft ${config.version})...`)
+  console.log('Connecting to ' + config.host + ':' + config.port + ' as ' + config.username +
+    ' (Minecraft ' + config.version + ')...')
 
   let client
   try {
@@ -540,229 +250,61 @@ function connect() {
   }
 
   activeClient = client
-  let thisClientReachedOnline = false
   client.on('packet', () => {
     if (activeClient === client) lastServerPacketAt = Date.now()
   })
   client.on('playerJoin', () => {
-    startWatchdog(client)
-    if (!thisClientReachedOnline) {
-      successfulConnections++
-      lastConnectedAt = Date.now()
-    }
-    stableConnectionTimer = setTimeout(() => {
-      if (activeClient === client && !client.ended) reconnectAttempts = 0
-    }, 60000)
-    if (!thisClientReachedOnline) {
-      thisClientReachedOnline = true
-      const wasOnlineBefore = hasBeenOnline
-      const wasUnreachable = initialOfflineAlertSent
-      const title = wasOnlineBefore || wasUnreachable
-        ? 'Minecraft Server Back Online'
-        : 'Minecraft Server Online'
-      const details = wasOnlineBefore || wasUnreachable
-        ? 'The bot successfully connected again after a previous disconnect. This may indicate a server restart or a temporary network interruption.'
-        : 'The bot connected successfully to ' + config.host + ':' + config.port + '.'
-      sendDiscordServerStatus(title, details, 0x57F287)
-      hasBeenOnline = true
-      initialOfflineAlertSent = false
-    }
+    reconnectAttempts = 0
+    lastServerPacketAt = Date.now()
+    stopWatchdog()
+    watchdogTimer = setInterval(() => {
+      if (shuttingDown || activeClient !== client || client.ended || client.state !== 'play') return
+      const silentFor = Date.now() - lastServerPacketAt
+      if (silentFor < config.watchdogTimeoutMs) return
+      console.warn('Connection watchdog timed out; reconnecting.')
+      stopMovement()
+      stopWatchdog()
+      try {
+        if (client.socket && !client.socket.destroyed) client.socket.destroy(new Error('Connection watchdog timeout'))
+        else client.end('Connection watchdog timeout')
+      } catch (error) {
+        console.warn('Could not close stale connection cleanly: ' + error.message)
+        client.end('Connection watchdog timeout')
+      }
+    }, 15000)
     console.log('Login complete; waiting for initial position synchronization.')
   })
-  for (const eventName of ['system_chat', 'player_chat', 'disguised_chat', 'profileless_chat', 'chat']) {
-    client.on(eventName, handleChatAlert)
-  }
   client.on('position', packet => handleServerPosition(client, packet))
   client.on('start_configuration', stopMovement)
   client.on('respawn', stopMovement)
-  client.on('disconnect', packet => {
-    console.warn('Server disconnected the bot:', formatReason(packet?.reason ?? packet))
-  })
-  client.on('error', error => {
-    console.error('Connection error:', error.message || formatReason(error))
-  })
+  client.on('disconnect', packet => console.warn('Server disconnected the bot:', formatReason(packet?.reason ?? packet)))
+  client.on('error', error => console.error('Connection error:', error.message || formatReason(error)))
   client.on('end', reason => {
     stopMovement()
     stopWatchdog()
     if (activeClient === client) activeClient = null
-    lastDisconnectedAt = Date.now()
-    console.warn(`Disconnected: ${formatReason(reason)}`)
-    if (!shuttingDown && thisClientReachedOnline) {
-      sendDiscordServerStatus(
-        'Minecraft Server Offline / Connection Lost',
-        'The active Minecraft connection ended. The server may have been stopped or restarted, or there may be a network interruption. The bot will keep trying to reconnect.',
-        0xED4245
-      )
-      initialOfflineAlertSent = true
-    } else if (!shuttingDown && !hasBeenOnline && !initialOfflineAlertSent) {
-      sendDiscordServerStatus(
-        'Minecraft Server Unreachable',
-        'The bot could not complete its initial connection to ' + config.host + ':' + config.port + '. The server may be stopped, starting, or temporarily unreachable. Connection attempts will continue.',
-        0xFEE75C
-      )
-      initialOfflineAlertSent = true
-    }
+    console.warn('Disconnected:', formatReason(reason))
     scheduleReconnect()
   })
-}
-
-function startDiscordCommands() {
-  if (!config.discordBotToken || !config.discordCommandChannelId || config.discordAllowedUserIds.length === 0) {
-    if (config.discordBotToken) console.warn('Discord commands disabled until channel ID and allowed user IDs are configured.')
-    return
-  }
-  if (typeof WebSocket !== 'function') {
-    console.warn('Discord commands disabled: this Node.js runtime does not expose the built-in WebSocket API.')
-    return
-  }
-
-  let socket = null
-  let heartbeatTimer = null
-  let reconnectTimer = null
-  let sequence = null
-  let stopped = false
-  let retryDelay = 5000
-
-  function scheduleGatewayReconnect() {
-    if (stopped || reconnectTimer || shuttingDown) return
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null
-      connectGateway()
-    }, retryDelay)
-    retryDelay = Math.min(retryDelay * 2, 60000)
-  }
-
-  async function reply(channelId, content) {
-    try {
-      const response = await fetch('https://discord.com/api/v10/channels/' + channelId + '/messages', {
-        method: 'POST',
-        headers: { Authorization: 'Bot ' + config.discordBotToken, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: content.slice(0, 1900), allowed_mentions: { parse: [] } })
-      })
-      if (!response.ok) console.warn('Discord command reply failed (HTTP ' + response.status + ').')
-    } catch (error) {
-      console.warn('Discord command reply failed: ' + error.message)
-    }
-  }
-
-  async function handleCommand(message) {
-    if (!message || message.author?.bot || message.channel_id !== config.discordCommandChannelId) return
-    if (!config.discordAllowedUserIds.includes(message.author?.id)) return
-    const content = String(message.content || '').trim().toLowerCase()
-    if (!/^!solis(?:\s|$)/.test(content)) return
-    const command = content.slice('!solis'.length).trim()
-    if (!command || command === 'help') {
-      await reply(message.channel_id, 'Commands: `!solis status`, `!solis stats`, `!solis pause`, `!solis resume`, `!solis jump`.')
-    } else if (command === 'status' || command === 'stats') {
-      await reply(message.channel_id, statsSummary())
-    } else if (command === 'pause') {
-      jumpingEnabled = false
-      forceJumpRequested = false
-      await reply(message.channel_id, 'AFK jumping paused. The Minecraft connection remains active.')
-    } else if (command === 'resume') {
-      jumpingEnabled = true
-      if (movement) movement.nextJumpAt = Date.now() + randomJumpDelay()
-      await reply(message.channel_id, 'AFK jumping resumed.')
-    } else if (command === 'jump') {
-      if (!activeClient || activeClient.ended || activeClient.state !== 'play' || !movement?.ready) {
-        await reply(message.channel_id, 'Cannot jump right now: the Minecraft client is not fully connected.')
-      } else if (!jumpingEnabled) {
-        await reply(message.channel_id, 'Jumping is paused. Use `!solis resume` first.')
-      } else {
-        forceJumpRequested = true
-        await reply(message.channel_id, 'Jump requested; it will trigger when the bot is grounded.')
-      }
-    } else {
-      await reply(message.channel_id, 'Unknown command. Use `!solis help`.')
-    }
-  }
-
-  function connectGateway() {
-    if (stopped || shuttingDown) return
-    try {
-      socket = new WebSocket('wss://gateway.discord.gg/?v=10&encoding=json')
-    } catch (error) {
-      console.warn('Could not start Discord command gateway: ' + error.message)
-      scheduleGatewayReconnect()
-      return
-    }
-
-    socket.addEventListener('message', event => {
-      let payload
-      try { payload = JSON.parse(event.data) } catch { return }
-      if (payload.s != null) sequence = payload.s
-
-      if (payload.op === 10) {
-        clearInterval(heartbeatTimer)
-        heartbeatTimer = setInterval(() => {
-          if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ op: 1, d: sequence }))
-        }, payload.d.heartbeat_interval)
-        socket.send(JSON.stringify({ op: 2, d: {
-          token: config.discordBotToken,
-          intents: (1 << 0) | (1 << 9) | (1 << 15),
-          properties: { os: process.platform, browser: 'solis-afk-bot', device: 'solis-afk-bot' }
-        } }))
-      } else if (payload.op === 7 || payload.op === 9) {
-        try { socket.close() } catch {}
-      } else if (payload.t === 'READY') {
-        retryDelay = 5000
-        console.log('Discord remote commands connected; listening only in the configured command channel.')
-      } else if (payload.t === 'MESSAGE_CREATE') {
-        void handleCommand(payload.d)
-      }
-    })
-    socket.addEventListener('close', () => {
-      clearInterval(heartbeatTimer)
-      heartbeatTimer = null
-      socket = null
-      scheduleGatewayReconnect()
-    })
-    socket.addEventListener('error', () => {
-      try { socket?.close() } catch {}
-    })
-  }
-
-  connectGateway()
-  return () => {
-    stopped = true
-    clearInterval(heartbeatTimer)
-    clearTimeout(reconnectTimer)
-    try { socket?.close() } catch {}
-  }
 }
 
 function shutdown() {
   if (shuttingDown) return
   shuttingDown = true
   stopMovement()
+  stopWatchdog()
   clearTimeout(reconnectTimer)
   reconnectTimer = null
-
   const client = activeClient
   activeClient = null
   if (client) {
-    try {
-      client.end('AFK bot stopped')
-    } catch (error) {
+    try { client.end('AFK bot stopped') } catch (error) {
       console.error('Error while stopping:', error.message)
     }
   }
-
   console.log('AFK bot stopped.')
 }
 
-const stopDiscordCommands = startDiscordCommands()
-if (config.statsIntervalMs > 0) {
-  statsLogTimer = setInterval(() => console.log('Runtime stats:\n' + statsSummary()), config.statsIntervalMs)
-}
-
-function shutdownAndCleanup() {
-  if (statsLogTimer) clearInterval(statsLogTimer)
-  if (stopDiscordCommands) stopDiscordCommands()
-  shutdown()
-}
-
-process.once('SIGINT', shutdownAndCleanup)
-process.once('SIGTERM', shutdownAndCleanup)
-
+process.once('SIGINT', shutdown)
+process.once('SIGTERM', shutdown)
 connect()
