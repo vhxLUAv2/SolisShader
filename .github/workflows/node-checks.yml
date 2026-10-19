@@ -2,12 +2,12 @@ name: Node checks
 
 on:
   push:
-    branches: [main, feature/schematic-builder]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
 jobs:
-  syntax-and-install:
+  syntax:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
