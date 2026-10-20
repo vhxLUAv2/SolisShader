@@ -2,7 +2,7 @@ name: Build mod
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/op-client-mod]
   pull_request:
     branches: [main]
   workflow_dispatch:
