@@ -43,7 +43,8 @@ public final class StoneBrickTrapdoorClient implements ClientModInitializer {
 
         restorePreviousSlotWhenDue(player);
 
-        if (client.screen != null) {
+        // In 26.2 the active screen is exposed through Minecraft.gui.
+        if (client.gui.screen() != null) {
             return;
         }
 
