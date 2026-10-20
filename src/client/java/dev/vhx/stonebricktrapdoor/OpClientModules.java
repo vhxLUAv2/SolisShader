@@ -117,7 +117,7 @@ public final class OpClientModules implements ClientModInitializer {
 
     private void equipTotem(Minecraft client, LocalPlayer player) {
         if (player.getOffhandItem().is(Items.TOTEM_OF_UNDYING)) return;
-        if (player.getHealth() > 8.0f && player.getOffhandItem().isEmpty()) {
+        if (player.getHealth() > 8.0f && !player.getOffhandItem().isEmpty()) {
             return;
         }
         int inventorySlot = -1;
