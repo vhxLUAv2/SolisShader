@@ -2,12 +2,13 @@
   "schemaVersion": 1,
   "id": "stone_brick_trapdoor",
   "version": "${version}",
-  "name": "Stone Brick Trapdoor Helper",
-  "description": "Automatically places a spruce trapdoor under stone bricks directly overhead.",
+  "name": "Solis OP Client",
+  "description": "Client-side utility modules including auto totem, water clutch, trapdoor placement, and configurable combat modules.",
   "environment": "client",
   "entrypoints": {
     "client": [
-      "dev.vhx.stonebricktrapdoor.StoneBrickTrapdoorClient"
+      "dev.vhx.stonebricktrapdoor.StoneBrickTrapdoorClient",
+      "dev.vhx.stonebricktrapdoor.OpClientModules"
     ]
   },
   "depends": {
