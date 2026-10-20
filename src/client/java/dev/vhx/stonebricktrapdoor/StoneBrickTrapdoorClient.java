@@ -19,9 +19,9 @@ import net.minecraft.world.phys.Vec3;
  * so multiplayer servers receive an ordinary use-on-block interaction.
  */
 public final class StoneBrickTrapdoorClient implements ClientModInitializer {
-    private static final int SCAN_INTERVAL_TICKS = 3;
-    private static final int PLACEMENT_COOLDOWN_TICKS = 20;
-    private static final int RESTORE_SLOT_DELAY_TICKS = 3;
+    private static final int SCAN_INTERVAL_TICKS = 1;
+    private static final int PLACEMENT_COOLDOWN_TICKS = 2;
+    private static final int RESTORE_SLOT_DELAY_TICKS = 2;
     private static final double HIT_FACE_EPSILON = 0.01;
 
     private int scanTicker;
@@ -110,11 +110,7 @@ public final class StoneBrickTrapdoorClient implements ClientModInitializer {
                 false
         );
 
-        /*
-         * Use the vanilla multiplayer interaction path. It syncs the selected
-         * hotbar slot and sends the ordinary use-on-block packet to the server;
-         * the server still validates placement and can reject it.
-         */
+        // Send a normal interaction to the server; it remains authoritative.
         client.gameMode.useItemOn(player, InteractionHand.MAIN_HAND, hit);
         placementCooldown = PLACEMENT_COOLDOWN_TICKS;
     }
