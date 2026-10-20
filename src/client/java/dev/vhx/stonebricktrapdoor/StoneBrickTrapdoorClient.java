@@ -13,11 +13,16 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 
-/** Automatically place a spruce trapdoor under overhead stone-brick blocks. */
+/**
+ * Places a spruce trapdoor under a stone-brick block immediately above
+ * the player's actual bounding box. Placement uses vanilla interaction logic,
+ * so multiplayer servers receive an ordinary use-on-block interaction.
+ */
 public final class StoneBrickTrapdoorClient implements ClientModInitializer {
     private static final int SCAN_INTERVAL_TICKS = 3;
-    private static final int PLACEMENT_COOLDOWN_TICKS = 8;
-    private static final int RESTORE_SLOT_DELAY_TICKS = 2;
+    private static final int PLACEMENT_COOLDOWN_TICKS = 20;
+    private static final int RESTORE_SLOT_DELAY_TICKS = 3;
+    private static final double HIT_FACE_EPSILON = 0.01;
 
     private int scanTicker;
     private int placementCooldown;
@@ -43,7 +48,7 @@ public final class StoneBrickTrapdoorClient implements ClientModInitializer {
 
         restorePreviousSlotWhenDue(player);
 
-        // In 26.2 the active screen is exposed through Minecraft.gui.
+        // Do not interfere with inventory/container screens or chat.
         if (client.gui.screen() != null) {
             return;
         }
@@ -61,20 +66,26 @@ public final class StoneBrickTrapdoorClient implements ClientModInitializer {
             return;
         }
 
-        BlockPos playerPos = player.blockPosition();
-        BlockPos stoneBrickPos = playerPos.above(2);
+        /*
+         * Use the player's bounding box rather than assuming their feet are
+         * centered on a full block. Subtract a tiny epsilon so a head exactly
+         * touching the ceiling still resolves to the block just below it.
+         */
+        BlockPos headCell = BlockPos.containing(
+                player.getX(),
+                player.getBoundingBox().maxY - 1.0E-4,
+                player.getZ()
+        );
+        BlockPos stoneBrickPos = headCell.above();
         BlockState supportState = client.level.getBlockState(stoneBrickPos);
-        if (!supportState.is(Blocks.STONE_BRICKS)) {
+
+        if (!supportState.is(Blocks.STONE_BRICKS)
+                || !supportState.isFaceSturdy(client.level, stoneBrickPos, Direction.DOWN)) {
             return;
         }
 
-        if (!supportState.isFaceSturdy(client.level, stoneBrickPos, Direction.DOWN)) {
-            return;
-        }
-
-        BlockPos placementPos = stoneBrickPos.below();
-        BlockState placementState = client.level.getBlockState(placementPos);
-        if (!placementState.canBeReplaced()) {
+        BlockPos placementPos = stoneBrickPos.relative(Direction.DOWN);
+        if (!client.level.getBlockState(placementPos).canBeReplaced()) {
             return;
         }
 
@@ -86,18 +97,24 @@ public final class StoneBrickTrapdoorClient implements ClientModInitializer {
             restoreSlotDelay = RESTORE_SLOT_DELAY_TICKS;
         }
 
-        Vec3 undersideCenter = new Vec3(
+        // A point slightly inside the underside avoids an exact boundary hit.
+        Vec3 undersideHit = new Vec3(
                 stoneBrickPos.getX() + 0.5,
-                stoneBrickPos.getY(),
+                stoneBrickPos.getY() + HIT_FACE_EPSILON,
                 stoneBrickPos.getZ() + 0.5
         );
         BlockHitResult hit = new BlockHitResult(
-                undersideCenter,
+                undersideHit,
                 Direction.DOWN,
                 stoneBrickPos,
                 false
         );
 
+        /*
+         * Use the vanilla multiplayer interaction path. It syncs the selected
+         * hotbar slot and sends the ordinary use-on-block packet to the server;
+         * the server still validates placement and can reject it.
+         */
         client.gameMode.useItemOn(player, InteractionHand.MAIN_HAND, hit);
         placementCooldown = PLACEMENT_COOLDOWN_TICKS;
     }
@@ -120,6 +137,7 @@ public final class StoneBrickTrapdoorClient implements ClientModInitializer {
             return;
         }
 
+        // Respect manual slot changes made by the player.
         if (slotBeforeSwitch >= 0
                 && player.getInventory().getSelectedSlot() == trapdoorHotbarSlot) {
             player.getInventory().setSelectedSlot(slotBeforeSwitch);
